@@ -178,6 +178,10 @@ export default function App() {
           user={user}
           onGoMemberLogin={() => setRoute('login_member')}
           onGoAdminLogin={() => openHiddenAdminAccess(user)}
+          onGoMemberPortal={() => {
+            setPortalEntryTab('my_portal');
+            setRoute('portal');
+          }}
           onGoPortal={() => {
             setPortalEntryTab(hasAdminPermissions(user) ? 'overview' : 'my_portal');
             setRoute('portal');

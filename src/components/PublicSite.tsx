@@ -46,11 +46,19 @@ interface PublicSiteProps {
   user: AuthUser | null;
   onGoMemberLogin: () => void;
   onGoAdminLogin: () => void;
+  onGoMemberPortal: () => void;
   onGoPortal: () => void;
   onHiddenAdminAccess?: () => void;
 }
 
-export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, onGoAdminLogin, onGoPortal, onHiddenAdminAccess }) => {
+export const PublicSite: React.FC<PublicSiteProps> = ({
+  user,
+  onGoMemberLogin,
+  onGoAdminLogin,
+  onGoMemberPortal,
+  onGoPortal,
+  onHiddenAdminAccess,
+}) => {
   const [section, setSection] = useState<PublicSection>('home');
   const [aboutTab, setAboutTab] = useState<'story' | 'leadership' | 'branches' | 'news'>('story');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -227,28 +235,30 @@ export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, o
             ))}
           </nav>
 
-          {/* Zone 3: Member Login & Admin Login / Authenticated Portal Action */}
+          {/* Zone 3: Member Button & Admin Button (always both visible) */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {user ? (
               <>
                 <button
                   type="button"
-                  onClick={onGoPortal}
-                  className="rounded-lg bg-[#053559] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#10242F] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  onClick={onGoMemberPortal}
+                  className="rounded-lg bg-[#BD5016] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#9D4010] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Member Portal
+                </button>
+                <button
+                  type="button"
+                  onClick={
+                    Object.keys(user.permissions).some((m) => m !== 'self' && user.permissions[m]?.view)
+                      ? onGoPortal
+                      : onGoAdminLogin
+                  }
+                  className="rounded-lg bg-[#10242F] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#053559] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   {Object.keys(user.permissions).some((m) => m !== 'self' && user.permissions[m]?.view)
                     ? 'Admin Dashboard'
-                    : 'Member Portal'}
+                    : 'Admin Login'}
                 </button>
-                {!Object.keys(user.permissions).some((m) => m !== 'self' && user.permissions[m]?.view) && (
-                  <button
-                    type="button"
-                    onClick={onGoAdminLogin}
-                    className="inline-flex rounded-lg bg-[#10242F] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#053559] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    Admin Login
-                  </button>
-                )}
               </>
             ) : (
               <>
@@ -299,30 +309,35 @@ export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, o
                 {item.label}
               </button>
             ))}
-            {!user && (
-              <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    onGoMemberLogin();
-                  }}
-                  className="w-full rounded-lg bg-[#BD5016] px-3 py-2.5 text-xs font-semibold text-white hover:bg-[#9D4010] cursor-pointer"
-                >
-                  Member Login
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMobileMenuOpen(false);
+            <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  if (user) onGoMemberPortal();
+                  else onGoMemberLogin();
+                }}
+                className="w-full rounded-lg bg-[#BD5016] px-3 py-2.5 text-xs font-semibold text-white hover:bg-[#9D4010] cursor-pointer"
+              >
+                {user ? 'Member Portal' : 'Member Login'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  if (user && Object.keys(user.permissions).some((m) => m !== 'self' && user.permissions[m]?.view)) {
+                    onGoPortal();
+                  } else {
                     onGoAdminLogin();
-                  }}
-                  className="w-full rounded-lg bg-[#10242F] px-3 py-2.5 text-xs font-semibold text-white hover:bg-[#053559] cursor-pointer"
-                >
-                  Admin Login
-                </button>
-              </div>
-            )}
+                  }
+                }}
+                className="w-full rounded-lg bg-[#10242F] px-3 py-2.5 text-xs font-semibold text-white hover:bg-[#053559] cursor-pointer"
+              >
+                {user && Object.keys(user.permissions).some((m) => m !== 'self' && user.permissions[m]?.view)
+                  ? 'Admin Dashboard'
+                  : 'Admin Login'}
+              </button>
+            </div>
           </div>
         )}
       </header>
