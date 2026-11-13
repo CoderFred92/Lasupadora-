@@ -9,18 +9,24 @@ import type { AuthUser } from './types';
 
 type AppRoute = 'public' | 'login_member' | 'login_admin' | 'portal' | 'verify';
 
+function hasAdminPermissions(authUser: AuthUser | null): boolean {
+  if (!authUser) return false;
+  return Object.keys(authUser.permissions).some((mod) => mod !== 'self' && authUser.permissions[mod]?.view);
+}
+
 function isAdminEntryUrl(): boolean {
   if (typeof window === 'undefined') return false;
   const path = window.location.pathname.replace(/\/+$/, '');
   const params = new URLSearchParams(window.location.search);
-  return path === '/admin' || params.has('admin') || window.location.hash === '#admin';
+  return path === '/admin' || path.startsWith('/admin/') || params.has('admin') || window.location.hash === '#admin';
 }
 
 function clearAdminEntryUrl() {
   if (typeof window === 'undefined') return;
   const url = new URL(window.location.href);
   let changed = false;
-  if (url.pathname.replace(/\/+$/, '') === '/admin') {
+  const path = url.pathname.replace(/\/+$/, '');
+  if (path === '/admin' || path.startsWith('/admin/')) {
     url.pathname = '/';
     changed = true;
   }
@@ -55,6 +61,15 @@ export default function App() {
     }
   };
 
+  const openHiddenAdminAccess = (currentUser: AuthUser | null = user) => {
+    if (hasAdminPermissions(currentUser)) {
+      setPortalEntryTab('overview');
+      setRoute('portal');
+    } else {
+      setRoute('login_admin');
+    }
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const vToken = params.get('verify');
@@ -69,15 +84,7 @@ export default function App() {
     loadSession()
       .then((sessionUser) => {
         if (requestedAdmin) {
-          if (
-            sessionUser &&
-            Object.keys(sessionUser.permissions).some((mod) => mod !== 'self' && sessionUser.permissions[mod]?.view)
-          ) {
-            setPortalEntryTab('overview');
-            setRoute('portal');
-          } else {
-            setRoute('login_admin');
-          }
+          openHiddenAdminAccess(sessionUser);
         }
       })
       .finally(() => setBooting(false));
@@ -86,21 +93,16 @@ export default function App() {
   useEffect(() => {
     const onUrlChange = () => {
       if (isAdminEntryUrl()) {
-        if (
-          user &&
-          Object.keys(user.permissions).some((mod) => mod !== 'self' && user.permissions[mod]?.view)
-        ) {
-          setPortalEntryTab('overview');
-          setRoute('portal');
-        } else {
-          setRoute('login_admin');
-        }
+        openHiddenAdminAccess(user);
       }
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+      const isAltShortcut = e.altKey && e.shiftKey && e.key.toLowerCase() === 'a';
+      const isCtrlAltShortcut = e.ctrlKey && e.altKey && e.key.toLowerCase() === 'a';
+      const isLegacyShortcut = (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a';
+      if (isAltShortcut || isCtrlAltShortcut || isLegacyShortcut) {
         e.preventDefault();
-        setRoute('login_admin');
+        openHiddenAdminAccess(user);
       }
     };
     window.addEventListener('hashchange', onUrlChange);
@@ -113,11 +115,11 @@ export default function App() {
     };
   }, [user]);
 
-  const handleLoginSuccess = async (mode: LoginMode) => {
+  const handleLoginSuccess = async (_mode: LoginMode) => {
     const loggedIn = await loadSession();
     if (loggedIn) {
       clearAdminEntryUrl();
-      setPortalEntryTab(mode === 'member' ? 'my_portal' : 'overview');
+      setPortalEntryTab(hasAdminPermissions(loggedIn) ? 'overview' : 'my_portal');
       setRoute('portal');
     }
   };
@@ -167,9 +169,10 @@ export default function App() {
           user={user}
           onGoMemberLogin={() => setRoute('login_member')}
           onGoPortal={() => {
-            setPortalEntryTab('overview');
+            setPortalEntryTab(hasAdminPermissions(user) ? 'overview' : 'my_portal');
             setRoute('portal');
           }}
+          onHiddenAdminAccess={() => openHiddenAdminAccess(user)}
         />
       )}
 

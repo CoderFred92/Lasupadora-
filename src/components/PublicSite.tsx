@@ -46,14 +46,35 @@ interface PublicSiteProps {
   user: AuthUser | null;
   onGoMemberLogin: () => void;
   onGoPortal: () => void;
+  onHiddenAdminAccess?: () => void;
 }
 
-export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, onGoPortal }) => {
+export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, onGoPortal, onHiddenAdminAccess }) => {
   const [section, setSection] = useState<PublicSection>('home');
   const [aboutTab, setAboutTab] = useState<'story' | 'leadership' | 'branches' | 'news'>('story');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [data, setData] = useState<PublicOverviewPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const secretTapRef = React.useRef<{ count: number; lastAt: number }>({ count: 0, lastAt: 0 });
+
+  const handleSecretTrigger = (e: React.MouseEvent) => {
+    if (!onHiddenAdminAccess) return;
+    if (e.altKey) {
+      e.preventDefault();
+      secretTapRef.current = { count: 0, lastAt: 0 };
+      onHiddenAdminAccess();
+      return;
+    }
+    const now = Date.now();
+    const withinWindow = now - secretTapRef.current.lastAt < 1800;
+    const nextCount = withinWindow ? secretTapRef.current.count + 1 : 1;
+    if (nextCount >= 5) {
+      secretTapRef.current = { count: 0, lastAt: 0 };
+      onHiddenAdminAccess();
+    } else {
+      secretTapRef.current = { count: nextCount, lastAt: now };
+    }
+  };
 
   const [selectedArticle, setSelectedArticle] = useState<Publication | null>(null);
   const [lightboxItem, setLightboxItem] = useState<MediaItem | null>(null);
@@ -171,7 +192,10 @@ export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, o
           {/* Zone 1: Single Brand Wordmark + Official Logo */}
           <button
             type="button"
-            onClick={() => navigate('home')}
+            onClick={(e) => {
+              navigate('home');
+              handleSecretTrigger(e);
+            }}
             className="flex items-center gap-2 sm:gap-3 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <OfficialLogo size="xs" />
@@ -1343,7 +1367,9 @@ export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, o
           </div>
 
           <div className="mt-10 flex flex-wrap items-center justify-between gap-4 border-t border-white/10 pt-6 text-[11px] text-slate-400">
-            <p>© {new Date().getFullYear()} LASUPADORA Masqueraders Society. Collectively governed by its members.</p>
+            <p onClick={handleSecretTrigger} className="select-none">
+              © {new Date().getFullYear()} LASUPADORA Masqueraders Society. Collectively governed by its members.
+            </p>
             <p className="font-mono-tabular">Currency: GHS · Official Brand Palette: #10242F / #053559 / #AD220B / #BD5016 / #E48947</p>
           </div>
         </div>

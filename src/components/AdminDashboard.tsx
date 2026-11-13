@@ -66,16 +66,46 @@ export const AdminDashboard: React.FC<{
     };
     recentAudit: { id: string; actor_name: string | null; action: string; target_table: string; created_at: string }[];
   } | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch<{ branches: Branch[]; subdivisions: Subdivision[]; categories: MembershipCategory[] }>('/api/public/overview').then((res) => {
-      setBranches(res.branches);
-      setSubdivisions(res.subdivisions);
-      setCategories(res.categories);
-    });
-    if (hasAdminAccess) {
-      apiFetch<typeof overview>('/api/admin/overview').then(setOverview).catch(() => {});
+    if (initialTab === 'my_portal') {
+      setTab('my_portal');
+    } else if (hasAdminAccess) {
+      setTab('overview');
+    } else {
+      setTab('my_portal');
     }
+  }, [initialTab, hasAdminAccess]);
+
+  const loadDashboardData = () => {
+    apiFetch<{ branches: Branch[]; subdivisions: Subdivision[]; categories: MembershipCategory[] }>('/api/public/overview')
+      .then((res) => {
+        setBranches(res.branches);
+        setSubdivisions(res.subdivisions);
+        setCategories(res.categories);
+      })
+      .catch(() => {});
+
+    if (hasAdminAccess) {
+      setOverviewLoading(true);
+      setOverviewError(null);
+      apiFetch<typeof overview>('/api/admin/overview')
+        .then((res) => {
+          setOverview(res);
+        })
+        .catch((err: Error) => {
+          setOverviewError(err.message || 'Failed to load Administrator Dashboard metrics.');
+        })
+        .finally(() => {
+          setOverviewLoading(false);
+        });
+    }
+  };
+
+  useEffect(() => {
+    loadDashboardData();
   }, [hasAdminAccess, tab]);
 
   const navItems: { id: AdminTabId; label: string; icon: React.ElementType; visible: boolean; summary?: string }[] = [
@@ -213,7 +243,7 @@ export const AdminDashboard: React.FC<{
         </header>
 
         <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
-          {tab === 'overview' && overview && (
+          {tab === 'overview' && (
             <div className="space-y-8">
               <div>
                 <h1 className="font-display text-2xl font-bold text-[#10242F]">Administrator Dashboard</h1>
@@ -222,35 +252,54 @@ export const AdminDashboard: React.FC<{
                 </p>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <p className="text-xs text-slate-500">Active / Total Members</p>
-                  <p className="mt-1 font-mono-tabular text-2xl font-bold text-[#10242F]">
-                    {overview.metrics.activeMembers} / {overview.metrics.totalMembers}
-                  </p>
+              {overviewError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-[#AD220B] flex flex-wrap items-center justify-between gap-3">
+                  <span>{overviewError}</span>
+                  <button
+                    type="button"
+                    onClick={loadDashboardData}
+                    className="rounded-lg bg-[#AD220B] px-3 py-1.5 font-semibold text-white hover:bg-[#8E1C09] cursor-pointer"
+                  >
+                    Retry
+                  </button>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <p className="text-xs text-slate-500">Pending Applications</p>
-                  <p className="mt-1 font-mono-tabular text-2xl font-bold text-[#BD5016]">
-                    {overview.metrics.pendingApps}
-                  </p>
+              )}
+
+              {overviewLoading && !overview ? (
+                <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-xs text-slate-500">
+                  Loading live metrics &amp; audit register...
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <p className="text-xs text-slate-500">Verified Income / Pending</p>
-                  <p className="mt-1 font-mono-tabular text-2xl font-bold text-[#146B3A]">
-                    {formatGHS(overview.metrics.verifiedIncomeGhs)}
-                  </p>
-                  <p className="mt-0.5 text-[11px] text-amber-700 font-semibold">
-                    {overview.metrics.pendingPayments} payment claims awaiting verification
-                  </p>
+              ) : overview ? (
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-xl border border-slate-200 bg-white p-5">
+                    <p className="text-xs text-slate-500">Active / Total Members</p>
+                    <p className="mt-1 font-mono-tabular text-2xl font-bold text-[#10242F]">
+                      {overview.metrics.activeMembers} / {overview.metrics.totalMembers}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-5">
+                    <p className="text-xs text-slate-500">Pending Applications</p>
+                    <p className="mt-1 font-mono-tabular text-2xl font-bold text-[#BD5016]">
+                      {overview.metrics.pendingApps}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-5">
+                    <p className="text-xs text-slate-500">Verified Income / Pending</p>
+                    <p className="mt-1 font-mono-tabular text-2xl font-bold text-[#146B3A]">
+                      {formatGHS(overview.metrics.verifiedIncomeGhs)}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-amber-700 font-semibold">
+                      {overview.metrics.pendingPayments} payment claims awaiting verification
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-5">
+                    <p className="text-xs text-slate-500">Approved Expenditure (GHS)</p>
+                    <p className="mt-1 font-mono-tabular text-2xl font-bold text-[#053559]">
+                      {formatGHS(overview.metrics.totalExpenditureGhs)}
+                    </p>
+                  </div>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <p className="text-xs text-slate-500">Approved Expenditure (GHS)</p>
-                  <p className="mt-1 font-mono-tabular text-2xl font-bold text-[#053559]">
-                    {formatGHS(overview.metrics.totalExpenditureGhs)}
-                  </p>
-                </div>
-              </div>
+              ) : null}
 
               {/* Direct Quick-Access Module Cards */}
               <div>
@@ -278,20 +327,22 @@ export const AdminDashboard: React.FC<{
                 </div>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-6">
-                <h2 className="font-display text-lg font-bold text-[#10242F]">Recent Society Audit Log</h2>
-                <div className="mt-4 divide-y divide-slate-100 text-xs">
-                  {overview.recentAudit.map((log) => (
-                    <div key={log.id} className="py-2.5 flex flex-wrap justify-between gap-2">
-                      <div>
-                        <span className="font-mono-tabular font-semibold text-[#053559]">{log.action}</span>
-                        <span className="text-slate-500"> · {log.target_table} · by {log.actor_name || 'System'}</span>
+              {overview && (
+                <div className="rounded-xl border border-slate-200 bg-white p-6">
+                  <h2 className="font-display text-lg font-bold text-[#10242F]">Recent Society Audit Log</h2>
+                  <div className="mt-4 divide-y divide-slate-100 text-xs">
+                    {overview.recentAudit.map((log) => (
+                      <div key={log.id} className="py-2.5 flex flex-wrap justify-between gap-2">
+                        <div>
+                          <span className="font-mono-tabular font-semibold text-[#053559]">{log.action}</span>
+                          <span className="text-slate-500"> · {log.target_table} · by {log.actor_name || 'System'}</span>
+                        </div>
+                        <span className="font-mono-tabular text-slate-400">{formatDate(log.created_at)}</span>
                       </div>
-                      <span className="font-mono-tabular text-slate-400">{formatDate(log.created_at)}</span>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
