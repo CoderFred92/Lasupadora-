@@ -3,7 +3,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const dataDir = path.resolve(process.cwd(), 'data');
+const dataDir = process.env.VERCEL
+  ? path.resolve('/tmp', 'lasupadora-data')
+  : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 export const uploadsPublicDir = path.resolve(dataDir, 'uploads', 'public');
