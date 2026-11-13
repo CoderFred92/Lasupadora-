@@ -16,17 +16,25 @@ function hasAdminPermissions(authUser: AuthUser | null): boolean {
 
 function isAdminEntryUrl(): boolean {
   if (typeof window === 'undefined') return false;
-  const path = window.location.pathname.replace(/\/+$/, '');
+  const path = window.location.pathname.replace(/\/+$/, '').toLowerCase();
   const params = new URLSearchParams(window.location.search);
-  return path === '/admin' || path.startsWith('/admin/') || params.has('admin') || window.location.hash === '#admin';
+  const hash = window.location.hash.toLowerCase();
+  return (
+    path === '/admin' ||
+    path.startsWith('/admin/') ||
+    path === '/administrator' ||
+    params.has('admin') ||
+    hash === '#admin' ||
+    hash === '#/admin'
+  );
 }
 
 function clearAdminEntryUrl() {
   if (typeof window === 'undefined') return;
   const url = new URL(window.location.href);
   let changed = false;
-  const path = url.pathname.replace(/\/+$/, '');
-  if (path === '/admin' || path.startsWith('/admin/')) {
+  const path = url.pathname.replace(/\/+$/, '').toLowerCase();
+  if (path === '/admin' || path.startsWith('/admin/') || path === '/administrator') {
     url.pathname = '/';
     changed = true;
   }
@@ -34,7 +42,8 @@ function clearAdminEntryUrl() {
     url.searchParams.delete('admin');
     changed = true;
   }
-  if (url.hash === '#admin') {
+  const hash = url.hash.toLowerCase();
+  if (hash === '#admin' || hash === '#/admin') {
     url.hash = '';
     changed = true;
   }
@@ -168,6 +177,7 @@ export default function App() {
         <PublicSite
           user={user}
           onGoMemberLogin={() => setRoute('login_member')}
+          onGoAdminLogin={() => openHiddenAdminAccess(user)}
           onGoPortal={() => {
             setPortalEntryTab(hasAdminPermissions(user) ? 'overview' : 'my_portal');
             setRoute('portal');

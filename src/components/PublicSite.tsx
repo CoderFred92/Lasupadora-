@@ -45,11 +45,12 @@ interface PublicOverviewPayload {
 interface PublicSiteProps {
   user: AuthUser | null;
   onGoMemberLogin: () => void;
+  onGoAdminLogin: () => void;
   onGoPortal: () => void;
   onHiddenAdminAccess?: () => void;
 }
 
-export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, onGoPortal, onHiddenAdminAccess }) => {
+export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, onGoAdminLogin, onGoPortal, onHiddenAdminAccess }) => {
   const [section, setSection] = useState<PublicSection>('home');
   const [aboutTab, setAboutTab] = useState<'story' | 'leadership' | 'branches' | 'news'>('story');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -196,14 +197,14 @@ export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, o
               navigate('home');
               handleSecretTrigger(e);
             }}
-            className="flex items-center gap-2 sm:gap-3 whitespace-nowrap shrink-0 cursor-pointer"
+            className="flex items-center gap-1.5 sm:gap-3 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <OfficialLogo size="xs" />
-            <span className="font-display text-base sm:text-lg font-bold tracking-tight text-[#10242F]">LASUPADORA</span>
+            <span className="font-display text-sm sm:text-lg font-bold tracking-tight text-[#10242F]">LASUPADORA</span>
           </button>
 
           {/* Zone 2: 5 concise single-line text nav links */}
-          <nav className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600">
+          <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-600">
             {[
               { id: 'home', label: 'Home' },
               { id: 'about', label: 'Society' },
@@ -226,32 +227,52 @@ export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, o
             ))}
           </nav>
 
-          {/* Zone 3: Member Login / Authenticated Portal Action */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Zone 3: Member Login & Admin Login / Authenticated Portal Action */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {user ? (
-              <button
-                type="button"
-                onClick={onGoPortal}
-                className="rounded-lg bg-[#10242F] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#053559] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                {Object.keys(user.permissions).some((m) => m !== 'self' && user.permissions[m]?.view)
-                  ? 'Admin Dashboard'
-                  : 'Member Portal'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={onGoPortal}
+                  className="rounded-lg bg-[#053559] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#10242F] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {Object.keys(user.permissions).some((m) => m !== 'self' && user.permissions[m]?.view)
+                    ? 'Admin Dashboard'
+                    : 'Member Portal'}
+                </button>
+                {!Object.keys(user.permissions).some((m) => m !== 'self' && user.permissions[m]?.view) && (
+                  <button
+                    type="button"
+                    onClick={onGoAdminLogin}
+                    className="inline-flex rounded-lg bg-[#10242F] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#053559] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    Admin Login
+                  </button>
+                )}
+              </>
             ) : (
-              <button
-                type="button"
-                onClick={onGoMemberLogin}
-                className="rounded-lg bg-[#BD5016] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#9D4010] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                Member Login
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={onGoMemberLogin}
+                  className="rounded-lg bg-[#BD5016] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#9D4010] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Member Login
+                </button>
+                <button
+                  type="button"
+                  onClick={onGoAdminLogin}
+                  className="rounded-lg bg-[#10242F] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#053559] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Admin Login
+                </button>
+              </>
             )}
             <button
               type="button"
               onClick={() => setMobileMenuOpen((v) => !v)}
               aria-label="Toggle Menu"
-              className="md:hidden rounded-lg border border-slate-200 p-2 text-[#10242F] cursor-pointer"
+              className="lg:hidden rounded-lg border border-slate-200 p-1.5 sm:p-2 text-[#10242F] cursor-pointer"
             >
               {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
             </button>
@@ -260,7 +281,7 @@ export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, o
 
         {/* Mobile Drawer */}
         {mobileMenuOpen && (
-          <div className="border-t border-slate-200 bg-white px-4 py-4 md:hidden space-y-2">
+          <div className="border-t border-slate-200 bg-white px-4 py-4 lg:hidden space-y-2">
             {[
               { id: 'home', label: 'Home' },
               { id: 'about', label: 'About, Leadership & Branches' },
@@ -279,7 +300,7 @@ export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, o
               </button>
             ))}
             {!user && (
-              <div className="pt-2 border-t border-slate-100">
+              <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -289,6 +310,16 @@ export const PublicSite: React.FC<PublicSiteProps> = ({ user, onGoMemberLogin, o
                   className="w-full rounded-lg bg-[#BD5016] px-3 py-2.5 text-xs font-semibold text-white hover:bg-[#9D4010] cursor-pointer"
                 >
                   Member Login
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onGoAdminLogin();
+                  }}
+                  className="w-full rounded-lg bg-[#10242F] px-3 py-2.5 text-xs font-semibold text-white hover:bg-[#053559] cursor-pointer"
+                >
+                  Admin Login
                 </button>
               </div>
             )}

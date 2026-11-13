@@ -109,7 +109,7 @@ export const LoginView: React.FC<{
               Back to Public Website
             </button>
 
-            {isAdmin && (
+            {isAdmin ? (
               <button
                 type="button"
                 onClick={() => handleModeSwitch('member')}
@@ -117,6 +117,15 @@ export const LoginView: React.FC<{
               >
                 <UserCheck className="h-3.5 w-3.5" />
                 Switch to Member Login
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleModeSwitch('admin')}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#BD5016] hover:text-[#10242F] cursor-pointer"
+              >
+                <Shield className="h-3.5 w-3.5" />
+                Switch to Admin Login
               </button>
             )}
           </div>
