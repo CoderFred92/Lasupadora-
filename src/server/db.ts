@@ -103,6 +103,9 @@ export function initSchema() {
       telephone TEXT NOT NULL,
       email TEXT UNIQUE,
       password_hash TEXT,
+      activation_code_hash TEXT,
+      activation_expires_at TEXT,
+      must_change_password INTEGER NOT NULL DEFAULT 0,
       residential_address TEXT,
       photo_url TEXT,
       branch_id TEXT NOT NULL REFERENCES branches(id) ON DELETE RESTRICT,
@@ -141,6 +144,7 @@ export function initSchema() {
       gender TEXT,
       telephone TEXT NOT NULL,
       email TEXT,
+      password_hash TEXT,
       residential_address TEXT,
       photo_url TEXT,
       preferred_branch_id TEXT NOT NULL REFERENCES branches(id) ON DELETE RESTRICT,
@@ -453,10 +457,28 @@ export function initSchema() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  const ensureColumn = (table: string, col: string, ddl: string) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === col)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    }
+  };
+  ensureColumn('members', 'activation_code_hash', 'activation_code_hash TEXT');
+  ensureColumn('members', 'activation_expires_at', 'activation_expires_at TEXT');
+  ensureColumn('members', 'must_change_password', 'must_change_password INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('membership_applications', 'password_hash', 'password_hash TEXT');
 }
 
 export function uid(): string {
   return crypto.randomUUID();
+}
+
+export function generateActivationCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(8);
+  const chars = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+  return `ACT-${chars.slice(0, 4)}-${chars.slice(4, 8)}`;
 }
 
 export function hashPassword(password: string): string {

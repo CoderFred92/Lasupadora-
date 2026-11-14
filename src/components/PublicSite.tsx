@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { OfficialLogo } from './OfficialLogo';
+import { PasswordInput } from './PasswordInput';
 import { PWAInstallButton } from './PWAControls';
 import { apiFetch, formatDate, formatGHS } from '../lib/api';
 import type {
@@ -86,6 +87,7 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
   };
 
   const [selectedArticle, setSelectedArticle] = useState<Publication | null>(null);
+  const [selectedEvent, setSelectedEvent] = useState<SocietyEvent | null>(null);
   const [lightboxItem, setLightboxItem] = useState<MediaItem | null>(null);
   const [galleryAlbumFilter, setGalleryAlbumFilter] = useState<string>('All');
   const [newsFilter, setNewsFilter] = useState<string>('All');
@@ -97,6 +99,8 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
     gender: '',
     telephone: '',
     email: '',
+    password: '',
+    confirm_password: '',
     residential_address: '',
     preferred_branch_id: '',
     preferred_subdivision_id: '',
@@ -109,7 +113,23 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
   });
   const [appSubmitting, setAppSubmitting] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
-  const [appResult, setAppResult] = useState<{ application_ref: string } | null>(null);
+  const [appResult, setAppResult] = useState<{ application_ref: string; has_password?: boolean } | null>(null);
+
+  // Application Status Check State
+  const [statusLookup, setStatusLookup] = useState({ application_ref: '', telephone: '' });
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [statusResult, setStatusResult] = useState<{
+    application_ref: string;
+    applicant_name: string;
+    status: string;
+    branch_name: string;
+    subdivision_name: string;
+    category_name: string;
+    review_comments: string | null;
+    membership_number: string | null;
+    needs_activation: boolean;
+  } | null>(null);
 
   // Contact Form State
   const [contactForm, setContactForm] = useState({ sender_name: '', sender_email: '', subject: '', message: '' });
@@ -153,10 +173,18 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
 
   const handleAppSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (appForm.password.length < 8) {
+      setAppError('Please choose a portal password of at least 8 characters.');
+      return;
+    }
+    if (appForm.password !== appForm.confirm_password) {
+      setAppError('Portal password and confirm password do not match.');
+      return;
+    }
     setAppSubmitting(true);
     setAppError(null);
     try {
-      const res = await apiFetch<{ application_ref: string }>('/api/public/applications', {
+      const res = await apiFetch<{ application_ref: string; has_password?: boolean }>('/api/public/applications', {
         method: 'POST',
         body: JSON.stringify(appForm),
       });
@@ -165,6 +193,34 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
       setAppError((err as Error).message);
     } finally {
       setAppSubmitting(false);
+    }
+  };
+
+  const handleStatusCheck = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStatusLoading(true);
+    setStatusError(null);
+    setStatusResult(null);
+    try {
+      const res = await apiFetch<{
+        application_ref: string;
+        applicant_name: string;
+        status: string;
+        branch_name: string;
+        subdivision_name: string;
+        category_name: string;
+        review_comments: string | null;
+        membership_number: string | null;
+        needs_activation: boolean;
+      }>('/api/public/applications/status', {
+        method: 'POST',
+        body: JSON.stringify(statusLookup),
+      });
+      setStatusResult(res);
+    } catch (err) {
+      setStatusError((err as Error).message);
+    } finally {
+      setStatusLoading(false);
     }
   };
 
@@ -185,6 +241,40 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
   };
 
   const appFieldPolicy = (data?.policies?.application_fields?.value || {}) as Record<string, boolean>;
+  const secretariatRaw = (data?.policies?.secretariat_settings?.value || {}) as Record<string, unknown>;
+  const secretariatAddress =
+    typeof secretariatRaw.secretariat_address === 'string' && secretariatRaw.secretariat_address.trim()
+      ? secretariatRaw.secretariat_address
+      : 'Community 1 Society Hall, Tema, Ghana (Placeholder — Update in Admin)';
+  const secretariatEmail =
+    typeof secretariatRaw.secretariat_email === 'string' && secretariatRaw.secretariat_email.trim()
+      ? secretariatRaw.secretariat_email
+      : 'secretariat@lasupadora.org';
+  const secretariatPhone =
+    typeof secretariatRaw.secretariat_phone === 'string' && secretariatRaw.secretariat_phone.trim()
+      ? secretariatRaw.secretariat_phone
+      : 'Not yet supplied — Update in Admin';
+  const officeHours =
+    typeof secretariatRaw.office_hours === 'string' && secretariatRaw.office_hours.trim()
+      ? secretariatRaw.office_hours
+      : 'Saturdays & Meeting Days (Editable by Admin)';
+  const showDemoNotice =
+    typeof secretariatRaw.show_demo_notice === 'boolean' ? secretariatRaw.show_demo_notice : true;
+  const demoNoticeText =
+    typeof secretariatRaw.demo_notice_text === 'string' && secretariatRaw.demo_notice_text.trim()
+      ? secretariatRaw.demo_notice_text
+      : 'Stage 1 Development Preview: Sample announcements, events, fundraising figures, leadership bios, and contact details are demonstration content in development pending official Secretariat confirmation.';
+
+  const parseCommittee = (raw: string | undefined | null): string[] => {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+    } catch {
+      return [];
+    }
+  };
+
   const filteredSubdivisions = data?.subdivisions.filter((s) => s.branch_id === appForm.preferred_branch_id) || [];
   const albums = ['All', ...Array.from(new Set((data?.gallery || []).map((g) => g.album_name)))];
   const visibleGallery =
@@ -194,10 +284,10 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
     newsFilter === 'All' ? data?.publications || [] : (data?.publications || []).filter((p) => p.category === newsFilter);
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F8F9FA] text-[#10242F]">
+    <div className="min-h-screen flex flex-col overflow-x-hidden bg-[#F8F9FA] text-[#10242F]">
       {/* Strict 3-Zone Top Bar Contract */}
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 sm:gap-6 px-3 py-3 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-1.5 sm:gap-6 px-2.5 py-2.5 sm:px-6 sm:py-3 lg:px-8">
           {/* Zone 1: Single Brand Wordmark + Official Logo */}
           <button
             type="button"
@@ -208,7 +298,7 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
             className="flex items-center gap-1.5 sm:gap-3 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <OfficialLogo size="xs" />
-            <span className="font-display text-sm sm:text-lg font-bold tracking-tight text-[#10242F]">LASUPADORA</span>
+            <span className="font-display text-[13px] sm:text-lg font-bold tracking-tight text-[#10242F]">LASUPADORA</span>
           </button>
 
           {/* Zone 2: 5 concise single-line text nav links */}
@@ -236,13 +326,13 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
           </nav>
 
           {/* Zone 3: Member Button & Admin Button (always both visible) */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             {user ? (
               <>
                 <button
                   type="button"
                   onClick={onGoMemberPortal}
-                  className="rounded-lg bg-[#BD5016] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#9D4010] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="rounded-lg bg-[#BD5016] px-2 sm:px-3.5 py-1.5 sm:py-2 text-[10.5px] sm:text-xs font-semibold text-white hover:bg-[#9D4010] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   Member Portal
                 </button>
@@ -253,7 +343,7 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                       ? onGoPortal
                       : onGoAdminLogin
                   }
-                  className="rounded-lg bg-[#10242F] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#053559] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="rounded-lg bg-[#10242F] px-2 sm:px-3.5 py-1.5 sm:py-2 text-[10.5px] sm:text-xs font-semibold text-white hover:bg-[#053559] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   {Object.keys(user.permissions).some((m) => m !== 'self' && user.permissions[m]?.view)
                     ? 'Admin Dashboard'
@@ -265,14 +355,14 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                 <button
                   type="button"
                   onClick={onGoMemberLogin}
-                  className="rounded-lg bg-[#BD5016] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#9D4010] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="rounded-lg bg-[#BD5016] px-2 sm:px-3.5 py-1.5 sm:py-2 text-[10.5px] sm:text-xs font-semibold text-white hover:bg-[#9D4010] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   Member Login
                 </button>
                 <button
                   type="button"
                   onClick={onGoAdminLogin}
-                  className="rounded-lg bg-[#10242F] px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-white hover:bg-[#053559] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="rounded-lg bg-[#10242F] px-2 sm:px-3.5 py-1.5 sm:py-2 text-[10.5px] sm:text-xs font-semibold text-white hover:bg-[#053559] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   Admin Login
                 </button>
@@ -349,6 +439,16 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
           </div>
         ) : (
           <>
+            {showDemoNotice && (
+              <div className="border-b border-amber-200 bg-amber-50/90 px-4 py-2.5 text-xs text-[#10242F]">
+                <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 sm:px-2 lg:px-4">
+                  <p className="leading-relaxed">
+                    <strong className="font-semibold text-[#AD220B]">Demonstration Content in Development:</strong>{' '}
+                    {demoNoticeText}
+                  </p>
+                </div>
+              </div>
+            )}
             {/* ==================== HOME SECTION ==================== */}
             {section === 'home' && (
               <div>
@@ -446,10 +546,12 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                   <div className="flex items-end justify-between border-b border-slate-200 pb-4">
                     <div>
                       <h2 className="font-display text-2xl font-bold text-[#10242F]">
-                        Official Announcements &amp; Society News
+                        Society Announcements &amp; News
                       </h2>
                       <p className="mt-1 text-sm text-slate-600">
-                        Verified publications approved for public release.
+                        {showDemoNotice
+                          ? 'Sample publications and notices in development (editable via Admin Dashboard).'
+                          : 'Approved publications released by the Secretariat.'}
                       </p>
                     </div>
                     <button
@@ -538,8 +640,8 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                                 </div>
                                 <button
                                   type="button"
-                                  onClick={() => (user ? onGoPortal() : navigate('events'))}
-                                  className="rounded-lg border border-slate-300 px-3.5 py-2 text-xs font-semibold text-[#10242F] hover:bg-slate-50 whitespace-nowrap shrink-0 cursor-pointer"
+                                  onClick={() => setSelectedEvent(evt)}
+                                  className="rounded-lg border border-slate-300 px-3.5 py-2 text-xs font-semibold text-[#10242F] hover:bg-slate-50 whitespace-nowrap shrink-0 cursor-pointer self-start sm:self-center"
                                 >
                                   Details
                                 </button>
@@ -554,7 +656,11 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                           const pct = Math.min(100, Math.round((camp.raised_ghs / camp.target_amount_ghs) * 100));
                           return (
                             <div key={camp.id} className="rounded-xl border border-slate-200 bg-[#F8F9FA] p-6">
-                              <p className="text-xs font-semibold text-[#AD220B]">Active Society Fundraising</p>
+                              <p className="text-xs font-semibold text-[#AD220B]">
+                                {showDemoNotice
+                                  ? 'Society Fundraising (Demonstration Figure)'
+                                  : 'Active Society Fundraising'}
+                              </p>
                               <h3 className="mt-1.5 font-display text-xl font-bold text-[#10242F]">{camp.title}</h3>
                               <p className="mt-2 text-xs text-slate-600 leading-relaxed">{camp.description}</p>
                               <div className="mt-4">
@@ -625,7 +731,7 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                       Charter, Constitutional Principles, Executive Leadership, Branches, and Publications.
                     </p>
                   </div>
-                  <div className="flex items-center gap-1 rounded-lg bg-slate-200/70 p-1">
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-1 rounded-lg bg-slate-200/70 p-1 max-w-full">
                     {[
                       { id: 'story', label: 'Charter & Values' },
                       { id: 'leadership', label: 'Leadership' },
@@ -694,7 +800,13 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                 )}
 
                 {aboutTab === 'leadership' && (
-                  <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="mt-8 space-y-6">
+                    {showDemoNotice && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3 text-xs text-slate-700">
+                        <strong>Development Note:</strong> Executive officer biographies and portrait placeholders below are demonstration entries editable by authorised administrators via the Admin Dashboard.
+                      </div>
+                    )}
+                    <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                     {(data?.leadership || []).map((lead) => {
                       const initials = lead.full_name
                         .split(' ')
@@ -746,6 +858,7 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                         </div>
                       );
                     })}
+                    </div>
                   </div>
                 )}
 
@@ -874,19 +987,28 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                             <strong>Highlights:</strong> {evt.post_event_report}
                           </div>
                         )}
-                        <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4 text-xs">
+                        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-4 text-xs">
                           <span className="font-mono-tabular text-slate-500">
                             {evt.registered_count || 0} members registered
                           </span>
-                          {evt.status === 'Upcoming' && evt.registration_open === 1 && (
+                          <div className="flex flex-wrap items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => (user ? onGoPortal() : onGoMemberLogin())}
-                              className="rounded-lg bg-[#BD5016] px-4 py-2 font-semibold text-white hover:bg-[#9D4010] cursor-pointer"
+                              onClick={() => setSelectedEvent(evt)}
+                              className="rounded-lg border border-slate-300 px-3.5 py-2 font-semibold text-[#10242F] hover:bg-slate-50 cursor-pointer"
                             >
-                              {user ? 'Register in Portal' : 'Member Sign In to Register'}
+                              View Details
                             </button>
-                          )}
+                            {evt.status === 'Upcoming' && evt.registration_open === 1 && (
+                              <button
+                                type="button"
+                                onClick={() => (user ? onGoMemberPortal() : onGoMemberLogin())}
+                                className="rounded-lg bg-[#BD5016] px-4 py-2 font-semibold text-white hover:bg-[#9D4010] cursor-pointer"
+                              >
+                                {user ? 'Register in Portal' : 'Member Sign In to Register'}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -956,7 +1078,7 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
               <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
                 <div className="grid gap-10 lg:grid-cols-12">
                   <div className="lg:col-span-8">
-                    <div className="rounded-xl border border-slate-200 bg-white p-8">
+                    <div className="rounded-xl border border-slate-200 bg-white p-5 sm:p-8">
                       <h1 className="font-display text-3xl font-bold text-[#10242F]">
                         Online Membership Application
                       </h1>
@@ -973,7 +1095,10 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                           <p className="mt-2 text-sm text-slate-700">
                             Your unique application reference is{' '}
                             <strong className="font-mono-tabular text-[#10242F]">{appResult.application_ref}</strong>.
-                            Status: <strong>Pending Review</strong>. Our branch secretariat will contact you after verification.
+                            Status: <strong>Pending Review</strong>.
+                          </p>
+                          <p className="mt-2 text-xs text-slate-600 leading-relaxed">
+                            Save your reference number and use the <strong>Check Application Status</strong> box on the right to see when your branch approves your application and view your newly issued <strong>LSMS Membership ID</strong>. Once approved, sign in via <strong>Member Login</strong> using your Email or Membership ID and the password you created.
                           </p>
                           <button
                             type="button"
@@ -984,6 +1109,8 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                                 full_name: '',
                                 telephone: '',
                                 email: '',
+                                password: '',
+                                confirm_password: '',
                                 residential_address: '',
                                 declaration_accepted: false,
                                 privacy_consent_accepted: false,
@@ -1160,6 +1287,43 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                             />
                           </div>
 
+                          <div className="rounded-xl border border-slate-200 bg-[#F8F9FA] p-4 space-y-3">
+                            <div>
+                              <h3 className="text-xs font-bold text-[#053559] uppercase tracking-wider">
+                                Member Portal Account Password
+                              </h3>
+                              <p className="mt-0.5 text-[11px] text-slate-600">
+                                Create the password you will use to sign in once your application is approved by your Branch Officers.
+                              </p>
+                            </div>
+                            <div className="grid gap-4 sm:grid-cols-2">
+                              <div>
+                                <label className="block text-xs font-semibold text-[#10242F]">Portal Password * (min. 8 characters)</label>
+                                <PasswordInput
+                                  required
+                                  minLength={8}
+                                  value={appForm.password}
+                                  onChange={(e) => setAppForm({ ...appForm, password: e.target.value })}
+                                  placeholder="Choose a strong password"
+                                  containerClassName="mt-1"
+                                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-[#053559] focus:outline-none"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-semibold text-[#10242F]">Confirm Portal Password *</label>
+                                <PasswordInput
+                                  required
+                                  minLength={8}
+                                  value={appForm.confirm_password}
+                                  onChange={(e) => setAppForm({ ...appForm, confirm_password: e.target.value })}
+                                  placeholder="Re-enter your password"
+                                  containerClassName="mt-1"
+                                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-[#053559] focus:outline-none"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
                           <div className="space-y-2.5 border-t border-slate-100 pt-4 text-xs text-slate-700">
                             <label className="flex items-start gap-2.5 cursor-pointer">
                               <input
@@ -1199,8 +1363,99 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
                     </div>
                   </div>
 
-                  {/* Membership FAQs & Categories */}
+                  {/* Membership Status Check, Categories & FAQs */}
                   <div className="lg:col-span-4 space-y-6">
+                    <div className="rounded-xl border border-[#053559]/20 bg-white p-6">
+                      <h2 className="font-display text-xl font-bold text-[#10242F]">Check Application Status</h2>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Already applied? Check approval status and retrieve your issued <strong>LSMS Membership ID</strong>.
+                      </p>
+                      <form onSubmit={handleStatusCheck} className="mt-4 space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-[#10242F]">Application Reference *</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="e.g. APP-2026-1234"
+                            value={statusLookup.application_ref}
+                            onChange={(e) => setStatusLookup({ ...statusLookup, application_ref: e.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono-tabular focus:border-[#053559] focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-[#10242F]">Telephone Number *</label>
+                          <input
+                            type="tel"
+                            required
+                            placeholder="+233 24 000 0000"
+                            value={statusLookup.telephone}
+                            onChange={(e) => setStatusLookup({ ...statusLookup, telephone: e.target.value })}
+                            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-[#053559] focus:outline-none"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={statusLoading}
+                          className="w-full rounded-lg bg-[#053559] px-4 py-2 text-xs font-semibold text-white hover:bg-[#10242F] disabled:opacity-50 cursor-pointer"
+                        >
+                          {statusLoading ? 'Checking...' : 'Check Status'}
+                        </button>
+                      </form>
+
+                      {statusError && (
+                        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-[#AD220B]">
+                          {statusError}
+                        </div>
+                      )}
+
+                      {statusResult && (
+                        <div className="mt-4 rounded-lg border border-slate-200 bg-[#F8F9FA] p-3.5 text-xs space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-[#10242F]">{statusResult.applicant_name}</span>
+                            <span
+                              className={`font-bold ${
+                                statusResult.status === 'Approved'
+                                  ? 'text-[#146B3A]'
+                                  : statusResult.status === 'Rejected'
+                                    ? 'text-[#AD220B]'
+                                    : 'text-[#BD5016]'
+                              }`}
+                            >
+                              {statusResult.status}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-600">
+                            {statusResult.branch_name} ({statusResult.subdivision_name}) · {statusResult.category_name}
+                          </p>
+                          {statusResult.review_comments && (
+                            <p className="text-[11px] text-slate-600">
+                              <strong>Note:</strong> {statusResult.review_comments}
+                            </p>
+                          )}
+                          {statusResult.status === 'Approved' && statusResult.membership_number && (
+                            <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 p-2.5 space-y-2">
+                              <p className="text-[11px] text-[#146B3A]">
+                                Issued Membership ID:{' '}
+                                <strong className="font-mono-tabular text-[#10242F]">{statusResult.membership_number}</strong>
+                              </p>
+                              <p className="text-[11px] text-slate-600">
+                                {statusResult.needs_activation
+                                  ? 'Use "Activate Account / Set Password" on the Member Login page with the activation code from your officer.'
+                                  : 'You can now sign in via Member Login using this ID or your email and your password.'}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={onGoMemberLogin}
+                                className="w-full rounded-md bg-[#146B3A] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0f542d] cursor-pointer"
+                              >
+                                Go to Member Login
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
                     <div className="rounded-xl border border-slate-200 bg-white p-6">
                       <h2 className="font-display text-xl font-bold text-[#10242F]">Membership Categories</h2>
                       <div className="mt-4 divide-y divide-slate-100">
@@ -1247,11 +1502,30 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
             {/* ==================== CONTACT SECTION ==================== */}
             {section === 'contact' && (
               <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 lg:px-8">
-                <div className="rounded-xl border border-slate-200 bg-white p-8">
+                <div className="rounded-xl border border-slate-200 bg-white p-5 sm:p-8">
                   <h1 className="font-display text-3xl font-bold text-[#10242F]">Contact the Secretariat</h1>
                   <p className="mt-1 text-sm text-slate-600">
                     Reach LASUPADORA Masqueraders Society for cultural invitations, partnerships, or membership inquiries.
                   </p>
+
+                  <div className="mt-6 grid gap-4 rounded-xl border border-slate-200 bg-[#F8F9FA] p-4 sm:grid-cols-2 text-xs">
+                    <div>
+                      <p className="font-semibold text-[#10242F]">Secretariat Address</p>
+                      <p className="mt-0.5 text-slate-600">{secretariatAddress}</p>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-[#10242F]">Official Email</p>
+                      <p className="mt-0.5 font-mono-tabular text-slate-600 break-all">{secretariatEmail}</p>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-[#10242F]">Telephone</p>
+                      <p className="mt-0.5 font-mono-tabular text-slate-600">{secretariatPhone}</p>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-[#10242F]">Office &amp; Meeting Hours</p>
+                      <p className="mt-0.5 text-slate-600">{officeHours}</p>
+                    </div>
+                  </div>
 
                   <form onSubmit={handleContactSubmit} className="mt-8 space-y-5">
                     {contactSuccess && (
@@ -1321,8 +1595,8 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
 
       {/* Article Reader Modal */}
       {selectedArticle && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 sm:p-8 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelectedArticle(null)}>
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 sm:p-8 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div className="text-xs text-slate-500">
                 <span className="font-semibold text-[#AD220B]">{selectedArticle.category}</span>
@@ -1332,6 +1606,7 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedArticle(null)}
+                aria-label="Close Publication"
                 className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 cursor-pointer"
               >
                 <X className="h-5 w-5" />
@@ -1347,6 +1622,95 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
               />
             )}
             <p className="mt-5 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{selectedArticle.body}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Event Details Modal */}
+      {selectedEvent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelectedEvent(null)}>
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 sm:p-8 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                <span className="font-semibold text-[#AD220B]">{selectedEvent.status}</span>
+                <span aria-hidden="true">·</span>
+                <span className="font-semibold text-[#053559]">{selectedEvent.branch_name || 'National Society'}</span>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono-tabular">{formatDate(selectedEvent.event_date)}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedEvent(null)}
+                aria-label="Close Event Details"
+                className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <h2 className="mt-3 font-display text-2xl font-bold text-[#10242F]">{selectedEvent.title}</h2>
+            <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-slate-600">
+              <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+              <span>{selectedEvent.venue}</span>
+            </p>
+            {selectedEvent.poster_url && (
+              <img
+                src={selectedEvent.poster_url}
+                alt={selectedEvent.title}
+                referrerPolicy="no-referrer"
+                className="mt-5 aspect-[16/9] w-full rounded-lg border border-slate-200 object-cover"
+              />
+            )}
+            <p className="mt-5 text-sm text-slate-700 leading-relaxed whitespace-pre-line">{selectedEvent.description}</p>
+
+            {parseCommittee(selectedEvent.organising_committee).length > 0 && (
+              <div className="mt-5 rounded-lg border border-slate-200 bg-[#F8F9FA] p-4">
+                <p className="text-xs font-semibold text-[#10242F]">Organising Committee</p>
+                <ul className="mt-1.5 list-disc pl-4 text-xs text-slate-600 space-y-1">
+                  {parseCommittee(selectedEvent.organising_committee).map((member, idx) => (
+                    <li key={idx}>{member}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {selectedEvent.post_event_report && (
+              <div className="mt-4 rounded-lg border border-slate-200 bg-[#F8F9FA] p-4 text-xs text-slate-700">
+                <p className="font-semibold text-[#10242F]">Post-Event Report &amp; Highlights</p>
+                <p className="mt-1 leading-relaxed">{selectedEvent.post_event_report}</p>
+              </div>
+            )}
+
+            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 text-xs">
+              <span className="font-mono-tabular text-slate-500">
+                <Calendar className="mr-1.5 inline h-3.5 w-3.5 text-slate-400" />
+                {selectedEvent.registered_count || 0} members registered
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedEvent.status === 'Upcoming' && selectedEvent.registration_open === 1 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedEvent(null);
+                      if (user) onGoMemberPortal();
+                      else onGoMemberLogin();
+                    }}
+                    className="rounded-lg bg-[#BD5016] px-4 py-2 font-semibold text-white hover:bg-[#9D4010] cursor-pointer"
+                  >
+                    {user ? 'Register in Member Portal' : 'Member Sign In to Register'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedEvent(null);
+                    navigate('events');
+                  }}
+                  className="rounded-lg border border-slate-300 px-3.5 py-2 font-semibold text-[#10242F] hover:bg-slate-50 cursor-pointer"
+                >
+                  Full Calendar
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1397,9 +1761,10 @@ export const PublicSite: React.FC<PublicSiteProps> = ({
             </div>
 
             <div className="space-y-2 text-xs">
-              <p className="font-semibold text-white">Secretariat &amp; Social</p>
-              <p>Community 1 Society Hall, Tema, Ghana</p>
-              <p>secretariat@lasupadora.org</p>
+              <p className="font-semibold text-white">Secretariat &amp; Contact</p>
+              <p>{secretariatAddress}</p>
+              <p className="font-mono-tabular break-all">{secretariatEmail}</p>
+              <p className="font-mono-tabular">{secretariatPhone}</p>
               <button type="button" onClick={() => navigate('contact')} className="inline-flex items-center gap-1 text-[#E48947] hover:underline cursor-pointer">
                 Contact Form <ExternalLink className="h-3 w-3" />
               </button>

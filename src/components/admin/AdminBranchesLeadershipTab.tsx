@@ -404,7 +404,12 @@ export const AdminBranchesLeadershipTab: React.FC<{ user: AuthUser }> = ({ user 
       {user.permissions.branches?.view && (
         <section className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-7 rounded-xl border border-slate-200 bg-white p-6 space-y-4">
-            <h2 className="font-display text-xl font-bold text-[#10242F]">Branches &amp; Subdivisions</h2>
+            <div>
+              <h2 className="font-display text-xl font-bold text-[#10242F]">Branches &amp; Subdivisions</h2>
+              <p className="mt-1 text-xs text-slate-600">
+                Official Society structure: <strong>Tema Branch</strong> (Communities 1–25) and <strong>Outside Tema Branch</strong> (Towns &amp; Regions). Additional branches require constitutional approval.
+              </p>
+            </div>
             <div className="space-y-4">
               {branches.map((b) => {
                 const subs = subdivisions.filter((s) => s.branch_id === b.id);
@@ -435,30 +440,37 @@ export const AdminBranchesLeadershipTab: React.FC<{ user: AuthUser }> = ({ user 
             </div>
           </div>
 
-          {user.permissions.branches?.create && (
+          {(user.permissions.branches?.create || user.permissions.branches?.approve) && (
             <div className="lg:col-span-5 space-y-6">
-              <form onSubmit={createSubdivision} className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-                <h3 className="text-sm font-bold text-[#10242F]">Add Subdivision / Town / Community</h3>
-                <select value={newSub.branch_id} onChange={(e) => setNewSub({ ...newSub, branch_id: e.target.value })} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
-                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="text" required placeholder="Code (e.g. KOF-01)" value={newSub.code} onChange={(e) => setNewSub({ ...newSub, code: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs" />
-                  <input type="text" required placeholder="Subdivision Name" value={newSub.name} onChange={(e) => setNewSub({ ...newSub, name: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs" />
-                </div>
-                <input type="text" placeholder="Region (e.g. Eastern Region)" value={newSub.region} onChange={(e) => setNewSub({ ...newSub, region: e.target.value })} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" />
-                <button type="submit" className="w-full rounded-lg bg-[#10242F] py-2 text-xs font-semibold text-white cursor-pointer">Add Subdivision</button>
-              </form>
+              {user.permissions.branches?.create && (
+                <form onSubmit={createSubdivision} className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
+                  <h3 className="text-sm font-bold text-[#10242F]">Add Subdivision / Town / Community</h3>
+                  <select value={newSub.branch_id} onChange={(e) => setNewSub({ ...newSub, branch_id: e.target.value })} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+                    {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input type="text" required placeholder="Code (e.g. KOF-01)" value={newSub.code} onChange={(e) => setNewSub({ ...newSub, code: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs" />
+                    <input type="text" required placeholder="Subdivision Name" value={newSub.name} onChange={(e) => setNewSub({ ...newSub, name: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs" />
+                  </div>
+                  <input type="text" placeholder="Region (e.g. Eastern Region)" value={newSub.region} onChange={(e) => setNewSub({ ...newSub, region: e.target.value })} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" />
+                  <button type="submit" className="w-full rounded-lg bg-[#10242F] py-2 text-xs font-semibold text-white cursor-pointer">Add Subdivision</button>
+                </form>
+              )}
 
-              <form onSubmit={createBranch} className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-                <h3 className="text-sm font-bold text-[#10242F]">Expand Organisation: Create Branch</h3>
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="text" required placeholder="Code (e.g. WR)" value={newBranch.code} onChange={(e) => setNewBranch({ ...newBranch, code: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs" />
-                  <input type="text" required placeholder="Branch Name" value={newBranch.name} onChange={(e) => setNewBranch({ ...newBranch, name: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs" />
-                </div>
-                <input type="text" placeholder="Region" value={newBranch.region} onChange={(e) => setNewBranch({ ...newBranch, region: e.target.value })} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" />
-                <button type="submit" className="w-full rounded-lg border border-slate-300 py-2 text-xs font-semibold text-[#10242F] hover:bg-slate-50 cursor-pointer">Create Branch</button>
-              </form>
+              {user.permissions.branches?.approve && (
+                <form onSubmit={createBranch} className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
+                  <h3 className="text-sm font-bold text-[#10242F]">Authorised Branch Expansion</h3>
+                  <p className="text-[11px] text-amber-800">
+                    Restricted to constitutional approval: Only add a new branch beyond Tema and Outside Tema if formally resolved by the Society.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input type="text" required placeholder="Code (e.g. WR)" value={newBranch.code} onChange={(e) => setNewBranch({ ...newBranch, code: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs" />
+                    <input type="text" required placeholder="Branch Name" value={newBranch.name} onChange={(e) => setNewBranch({ ...newBranch, name: e.target.value })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs" />
+                  </div>
+                  <input type="text" placeholder="Region" value={newBranch.region} onChange={(e) => setNewBranch({ ...newBranch, region: e.target.value })} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" />
+                  <button type="submit" className="w-full rounded-lg border border-slate-300 py-2 text-xs font-semibold text-[#10242F] hover:bg-slate-50 cursor-pointer">Create Authorised Branch</button>
+                </form>
+              )}
             </div>
           )}
         </section>

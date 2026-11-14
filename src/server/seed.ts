@@ -1,9 +1,31 @@
 import crypto from 'node:crypto';
 import { db, hashPassword, uid } from './db.ts';
 
+function ensureSecretariatSettingsPolicy() {
+  const defaultSecretariatSettings = {
+    secretariat_address: 'Community 1 Society Hall, Tema, Ghana (Placeholder — Update in Admin)',
+    secretariat_email: 'secretariat@lasupadora.org',
+    secretariat_phone: 'Not yet supplied — Update in Admin',
+    office_hours: 'Saturdays & Meeting Days (Editable by Admin)',
+    show_demo_notice: true,
+    demo_notice_text:
+      'Stage 1 Development Preview: Sample announcements, events, fundraising figures, leadership bios, and contact details below are demonstration content in development pending official Secretariat confirmation.',
+  };
+  db.prepare(
+    `INSERT OR IGNORE INTO governance_policies (key, category, label, value_json, requires_constitutional_confirmation, confirmed)
+     VALUES (?, ?, ?, ?, 0, 0)`
+  ).run(
+    'secretariat_settings',
+    'operations',
+    'Secretariat Contact & Demonstration Notice',
+    JSON.stringify(defaultSecretariatSettings)
+  );
+}
+
 export function seedIfEmpty() {
   const countRow = db.prepare('SELECT COUNT(*) AS cnt FROM branches').get() as { cnt: number };
   if (countRow.cnt > 0) {
+    ensureSecretariatSettingsPolicy();
     // Ensure Super Admin retains configured email without reverting custom Membership IDs
     const existingAdmin = db
       .prepare(
@@ -227,6 +249,7 @@ export function seedIfEmpty() {
     insPolicy.run('financial_controls', 'finance', 'Financial Control Gates (GHS)', JSON.stringify({ currency: 'GHS', no_budget_no_approval: true, no_accounts_no_next_funding: true, budget_submission_weeks_before_event: 4, receipt_submission_days_after_event: 7 }), 1, 1);
     insPolicy.run('application_fields', 'membership', 'Membership Application Field Rules', JSON.stringify({ require_dob: true, require_gender: false, require_photo: false, require_address: true, require_emergency_contact: true, require_supporting_doc: false, allow_officer_exception: false }), 1, 0);
     insPolicy.run('voting_rules', 'governance', 'Constitutional Quorum & Voting Thresholds', JSON.stringify({ quorum_percentage: 50, simple_majority_percent: 51, constitutional_amendment_percent: 67 }), 1, 0);
+    ensureSecretariatSettingsPolicy();
 
     // 6. Seed Members & Accounts (default password for test accounts: "Lasupadora2026!")
     const passHash = hashPassword('Lasupadora2026!');

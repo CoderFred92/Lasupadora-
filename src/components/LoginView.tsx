@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowLeft, KeyRound, Lock, Mail, Shield, UserCheck } from 'lucide-react';
 import { OfficialLogo } from './OfficialLogo';
+import { PasswordInput } from './PasswordInput';
 import { apiFetch, setAuthToken } from '../lib/api';
 import type { AuthUser } from '../types';
 
@@ -28,15 +29,24 @@ export const LoginView: React.FC<{
 }> = ({ mode, onSwitchMode, onSuccess, onBack }) => {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [memberAuthView, setMemberAuthView] = useState<'signin' | 'activate'>('signin');
+  const [activationCode, setActivationCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isAdmin = mode === 'admin';
+  const isActivate = !isAdmin && memberAuthView === 'activate';
   const accounts = isAdmin ? ADMIN_TEST_ACCOUNTS : MEMBER_TEST_ACCOUNTS;
 
   const handleModeSwitch = (nextMode: LoginMode) => {
     setIdentifier('');
     setPassword('');
+    setActivationCode('');
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setMemberAuthView('signin');
     setError(null);
     onSwitchMode(nextMode);
   };
@@ -46,6 +56,33 @@ export const LoginView: React.FC<{
     setLoading(true);
     setError(null);
     try {
+      if (isActivate) {
+        if (newPassword.length < 8) {
+          setError('New password must be at least 8 characters long.');
+          setLoading(false);
+          return;
+        }
+        if (newPassword !== confirmNewPassword) {
+          setError('New password and confirmation password do not match.');
+          setLoading(false);
+          return;
+        }
+        const actRes = await apiFetch<{ success: boolean; token?: string; user?: AuthUser | null }>('/api/auth/activate', {
+          method: 'POST',
+          body: JSON.stringify({
+            identifier,
+            activation_code: activationCode,
+            new_password: newPassword,
+            confirm_password: confirmNewPassword,
+          }),
+        });
+        if (actRes.token) {
+          setAuthToken(actRes.token);
+        }
+        await onSuccess('member');
+        return;
+      }
+
       const loginRes = await apiFetch<{ success: boolean; token?: string; user?: AuthUser | null }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ identifier, password }),
@@ -90,15 +127,16 @@ export const LoginView: React.FC<{
   };
 
   const quickFill = (email: string) => {
+    setMemberAuthView('signin');
     setIdentifier(email);
     setPassword('Lasupadora2026!');
     setError(null);
   };
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] px-4 py-12">
-      <div className="mx-auto max-w-4xl grid gap-8 lg:grid-cols-12 items-start">
-        <div className="lg:col-span-7 rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+    <div className="min-h-screen bg-[#F8F9FA] px-4 py-6 sm:py-12">
+      <div className="mx-auto max-w-4xl grid gap-6 sm:gap-8 lg:grid-cols-12 items-start">
+        <div className="lg:col-span-7 rounded-xl border border-slate-200 bg-white p-5 sm:p-8 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <button
               type="button"
@@ -140,21 +178,52 @@ export const LoginView: React.FC<{
                   <UserCheck className="h-4 w-4 text-[#053559]" />
                 )}
                 <span className={`text-xs font-bold uppercase tracking-wider ${isAdmin ? 'text-[#BD5016]' : 'text-[#053559]'}`}>
-                  {isAdmin ? 'Executive & Officer Access' : 'Society Member Self-Service'}
+                  {isAdmin ? 'Executive & Officer Access' : isActivate ? 'First-Time Account Activation' : 'Society Member Self-Service'}
                 </span>
               </div>
               <h1 className="mt-1 font-display text-2xl font-bold text-[#10242F]">
-                {isAdmin ? 'Administrator Sign In' : 'Member Portal Sign In'}
+                {isAdmin ? 'Administrator Sign In' : isActivate ? 'Activate Member Account' : 'Member Portal Sign In'}
               </h1>
               <p className="text-sm text-slate-600">
                 {isAdmin
                   ? 'Sign in with an Administrator, Executive, or Branch Officer account to open the Administrator Dashboard.'
-                  : 'Sign in with your email or membership number to access your digital ID card, dues history, and events.'}
+                  : isActivate
+                    ? 'Enter your Membership ID or Email and the one-time activation code issued by your Branch Officer to set your password.'
+                    : 'Sign in with your email or membership number to access your digital ID card, dues history, and events.'}
               </p>
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+          {!isAdmin && (
+            <div className="mt-6 flex rounded-lg bg-slate-100 p-1 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => {
+                  setMemberAuthView('signin');
+                  setError(null);
+                }}
+                className={`flex-1 rounded-md py-2 transition-colors cursor-pointer ${
+                  memberAuthView === 'signin' ? 'bg-white text-[#10242F] shadow-sm' : 'text-slate-600 hover:text-[#10242F]'
+                }`}
+              >
+                Sign In with Password
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMemberAuthView('activate');
+                  setError(null);
+                }}
+                className={`flex-1 rounded-md py-2 transition-colors cursor-pointer ${
+                  memberAuthView === 'activate' ? 'bg-white text-[#10242F] shadow-sm' : 'text-slate-600 hover:text-[#10242F]'
+                }`}
+              >
+                Activate Account / Set Password
+              </button>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="mt-6 space-y-5">
             {error && (
               <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-[#AD220B]">
                 {error}
@@ -178,20 +247,66 @@ export const LoginView: React.FC<{
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-[#10242F]">Password</label>
-              <div className="relative mt-1.5">
-                <Lock className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <input
-                  type="password"
+            {isActivate ? (
+              <>
+                <div>
+                  <label className="block text-xs font-semibold text-[#10242F]">One-Time Activation Code *</label>
+                  <div className="relative mt-1.5">
+                    <KeyRound className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                    <input
+                      type="text"
+                      required
+                      value={activationCode}
+                      onChange={(e) => setActivationCode(e.target.value.toUpperCase())}
+                      placeholder="e.g. ACT-7K9M-2P4X"
+                      className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3 text-sm font-mono-tabular text-[#10242F] focus:border-[#053559] focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#10242F]">New Password * (min. 8 chars)</label>
+                    <PasswordInput
+                      key={`activate-new-${mode}`}
+                      required
+                      minLength={8}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Choose password"
+                      containerClassName="mt-1.5"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-[#10242F] focus:border-[#053559] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#10242F]">Confirm New Password *</label>
+                    <PasswordInput
+                      key={`activate-confirm-${mode}`}
+                      required
+                      minLength={8}
+                      value={confirmNewPassword}
+                      onChange={(e) => setConfirmNewPassword(e.target.value)}
+                      placeholder="Confirm password"
+                      containerClassName="mt-1.5"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-[#10242F] focus:border-[#053559] focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="block text-xs font-semibold text-[#10242F]">Password</label>
+                <PasswordInput
+                  key={`signin-password-${mode}`}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
-                  className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 pr-3 text-sm text-[#10242F] focus:border-[#053559] focus:outline-none"
+                  containerClassName="mt-1.5"
+                  leftIcon={<Lock className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />}
+                  className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-10 text-sm text-[#10242F] focus:border-[#053559] focus:outline-none"
                 />
               </div>
-            </div>
+            )}
 
             <button
               type="submit"
@@ -201,10 +316,14 @@ export const LoginView: React.FC<{
               }`}
             >
               {loading
-                ? 'Signing in...'
+                ? isActivate
+                  ? 'Activating Account...'
+                  : 'Signing in...'
                 : isAdmin
                   ? 'Sign In to Administrator Dashboard'
-                  : 'Sign In to Member Portal'}
+                  : isActivate
+                    ? 'Activate Account & Sign In'
+                    : 'Sign In to Member Portal'}
             </button>
           </form>
         </div>

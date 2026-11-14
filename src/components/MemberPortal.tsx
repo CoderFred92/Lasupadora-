@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Bell, Calendar, CreditCard, MessageSquare, Shield, UserCheck } from 'lucide-react';
 import { MembershipIDCard } from './MembershipIDCard';
+import { PasswordInput } from './PasswordInput';
 import { apiFetch, formatDate, formatGHS } from '../lib/api';
 import type { MemberRecord, SocietyEvent } from '../types';
 
@@ -77,6 +78,13 @@ export const MemberPortal: React.FC<{ onOpenVerify: (token: string) => void }> =
     subject: '',
     message: '',
   });
+
+  const [passwordForm, setPasswordForm] = useState({
+    current_password: '',
+    new_password: '',
+    confirm_password: '',
+  });
+  const [savingPassword, setSavingPassword] = useState(false);
 
   const loadData = async () => {
     setLoading(true);
@@ -168,6 +176,33 @@ export const MemberPortal: React.FC<{ onOpenVerify: (token: string) => void }> =
   const markRead = async (id: string) => {
     await apiFetch(`/api/member/notifications/${id}/read`, { method: 'POST' });
     await loadData();
+  };
+
+  const handlePasswordChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setFeedbackMsg(null);
+    if (passwordForm.new_password.length < 8) {
+      setErrorMsg('New password must be at least 8 characters long.');
+      return;
+    }
+    if (passwordForm.new_password !== passwordForm.confirm_password) {
+      setErrorMsg('New password and confirmation password do not match.');
+      return;
+    }
+    setSavingPassword(true);
+    try {
+      const res = await apiFetch<{ message?: string }>('/api/member/change-password', {
+        method: 'POST',
+        body: JSON.stringify(passwordForm),
+      });
+      setFeedbackMsg(res.message || 'Your portal password has been updated.');
+      setPasswordForm({ current_password: '', new_password: '', confirm_password: '' });
+    } catch (err) {
+      setErrorMsg((err as Error).message);
+    } finally {
+      setSavingPassword(false);
+    }
   };
 
   if (loading || !portal) {
@@ -296,6 +331,54 @@ export const MemberPortal: React.FC<{ onOpenVerify: (token: string) => void }> =
               className="rounded-lg bg-[#BD5016] px-5 py-2.5 text-xs font-semibold text-white hover:bg-[#9D4010] cursor-pointer"
             >
               Save Profile Updates
+            </button>
+          </form>
+
+          <form onSubmit={handlePasswordChange} className="lg:col-span-12 rounded-xl border border-slate-200 bg-white p-6 space-y-4">
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#10242F]">Account Security &amp; Password</h2>
+              <p className="text-xs text-slate-500">Update your Member Portal login password at any time.</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="block text-xs font-semibold text-[#10242F]">Current Password *</label>
+                <PasswordInput
+                  required
+                  value={passwordForm.current_password}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, current_password: e.target.value })}
+                  containerClassName="mt-1"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-[#053559] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#10242F]">New Password * (min. 8 chars)</label>
+                <PasswordInput
+                  required
+                  minLength={8}
+                  value={passwordForm.new_password}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
+                  containerClassName="mt-1"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-[#053559] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-[#10242F]">Confirm New Password *</label>
+                <PasswordInput
+                  required
+                  minLength={8}
+                  value={passwordForm.confirm_password}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })}
+                  containerClassName="mt-1"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-[#053559] focus:outline-none"
+                />
+              </div>
+            </div>
+            <button
+              type="submit"
+              disabled={savingPassword}
+              className="rounded-lg bg-[#053559] px-5 py-2.5 text-xs font-semibold text-white hover:bg-[#10242F] disabled:opacity-50 cursor-pointer"
+            >
+              {savingPassword ? 'Updating Password...' : 'Update Portal Password'}
             </button>
           </form>
         </div>

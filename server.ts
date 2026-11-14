@@ -6,6 +6,8 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 import {
   db,
+  generateActivationCode,
+  hashPassword,
   initSchema,
   logAudit,
   signSessionToken,
@@ -335,6 +337,8 @@ app.post('/api/public/applications', async (req, res) => {
       gender,
       telephone,
       email,
+      password,
+      confirm_password,
       residential_address,
       photo_url,
       preferred_branch_id,
@@ -369,6 +373,19 @@ app.post('/api/public/applications', async (req, res) => {
       return;
     }
 
+    let passwordHash: string | null = null;
+    if (password !== undefined && String(password).length > 0) {
+      if (String(password).length < 8) {
+        res.status(400).json({ error: 'Portal password must be at least 8 characters long.' });
+        return;
+      }
+      if (confirm_password !== undefined && String(password) !== String(confirm_password)) {
+        res.status(400).json({ error: 'Password and confirmation password do not match.' });
+        return;
+      }
+      passwordHash = hashPassword(String(password));
+    }
+
     if (email) {
       const existingMember = db.prepare(`SELECT id FROM members WHERE LOWER(email) = LOWER(?)`).get(email.trim());
       if (existingMember) {
@@ -383,10 +400,10 @@ app.post('/api/public/applications', async (req, res) => {
     db.exec('BEGIN');
     db.prepare(
       `INSERT INTO membership_applications (
-        id, application_ref, source, full_name, date_of_birth, gender, telephone, email, residential_address,
+        id, application_ref, source, full_name, date_of_birth, gender, telephone, email, password_hash, residential_address,
         photo_url, preferred_branch_id, preferred_subdivision_id, requested_category_id, previous_experience,
         emergency_contact_name, emergency_contact_phone, supporting_doc_url, declaration_accepted, privacy_consent_accepted, status
-      ) VALUES (?, ?, 'public_web', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 'Pending Review')`
+      ) VALUES (?, ?, 'public_web', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 'Pending Review')`
     ).run(
       id,
       ref,
@@ -395,6 +412,7 @@ app.post('/api/public/applications', async (req, res) => {
       gender || null,
       telephone.trim(),
       email?.trim() || null,
+      passwordHash,
       residential_address?.trim() || null,
       photo_url || null,
       preferred_branch_id,
@@ -460,11 +478,84 @@ app.post('/api/public/applications', async (req, res) => {
       }
     }
 
-    res.status(201).json({ id, application_ref: ref, status: 'Pending Review', supabaseSynced });
+    res.status(201).json({ id, application_ref: ref, status: 'Pending Review', has_password: Boolean(passwordHash), supabaseSynced });
   } catch (err) {
     try { db.exec('ROLLBACK'); } catch {}
     res.status(400).json({ error: (err as Error).message });
   }
+});
+
+function normalizePhoneDigits(phone: string | null | undefined): string {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('233') && digits.length >= 12) return digits.slice(-9);
+  if (digits.startsWith('0') && digits.length === 10) return digits.slice(-9);
+  return digits.slice(-9);
+}
+
+app.post('/api/public/applications/status', (req, res) => {
+  const { application_ref, telephone } = req.body as { application_ref?: string; telephone?: string };
+  if (!application_ref?.trim() || !telephone?.trim()) {
+    res.status(400).json({ error: 'Application reference (e.g. APP-2026-1234) and telephone number are required.' });
+    return;
+  }
+  const appRow = db
+    .prepare(
+      `SELECT a.application_ref, a.full_name, a.telephone, a.status, a.review_comments, a.submitted_at, a.reviewed_at, a.approved_member_id,
+              b.name AS branch_name, s.name AS subdivision_name, c.name AS category_name
+       FROM membership_applications a
+       JOIN branches b ON b.id = a.preferred_branch_id
+       JOIN subdivisions s ON s.id = a.preferred_subdivision_id
+       JOIN membership_categories c ON c.id = a.requested_category_id
+       WHERE UPPER(a.application_ref) = UPPER(?)`
+    )
+    .get(application_ref.trim()) as
+    | {
+        application_ref: string;
+        full_name: string;
+        telephone: string;
+        status: string;
+        review_comments: string | null;
+        submitted_at: string;
+        reviewed_at: string | null;
+        approved_member_id: string | null;
+        branch_name: string;
+        subdivision_name: string;
+        category_name: string;
+      }
+    | undefined;
+
+  if (!appRow || normalizePhoneDigits(appRow.telephone) !== normalizePhoneDigits(telephone)) {
+    res.status(404).json({ error: 'No matching application was found for that reference and telephone number.' });
+    return;
+  }
+
+  let membershipNumber: string | null = null;
+  let needsActivation = false;
+  if (appRow.status === 'Approved' && appRow.approved_member_id) {
+    const memberRow = db
+      .prepare(`SELECT membership_number, password_hash, activation_code_hash FROM members WHERE id = ?`)
+      .get(appRow.approved_member_id) as
+      | { membership_number: string; password_hash: string | null; activation_code_hash: string | null }
+      | undefined;
+    if (memberRow) {
+      membershipNumber = memberRow.membership_number;
+      needsActivation = !memberRow.password_hash && Boolean(memberRow.activation_code_hash);
+    }
+  }
+
+  res.json({
+    application_ref: appRow.application_ref,
+    applicant_name: appRow.full_name,
+    status: appRow.status,
+    branch_name: appRow.branch_name,
+    subdivision_name: appRow.subdivision_name,
+    category_name: appRow.category_name,
+    review_comments: appRow.review_comments,
+    submitted_at: appRow.submitted_at,
+    reviewed_at: appRow.reviewed_at,
+    membership_number: membershipNumber,
+    needs_activation: needsActivation,
+  });
 });
 
 app.post('/api/public/contact', async (req, res) => {
@@ -510,9 +601,18 @@ app.post('/api/auth/login', (req, res) => {
   }
   const member = db
     .prepare(
-      `SELECT id, password_hash, membership_status FROM members WHERE LOWER(email) = LOWER(?) OR UPPER(membership_number) = UPPER(?)`
+      `SELECT id, password_hash, activation_code_hash, membership_status FROM members WHERE LOWER(email) = LOWER(?) OR UPPER(membership_number) = UPPER(?)`
     )
-    .get(identifier.trim(), identifier.trim()) as { id: string; password_hash: string; membership_status: string } | undefined;
+    .get(identifier.trim(), identifier.trim()) as
+    | { id: string; password_hash: string | null; activation_code_hash: string | null; membership_status: string }
+    | undefined;
+
+  if (member && !member.password_hash && member.activation_code_hash) {
+    res.status(403).json({
+      error: 'Your membership account has been approved! Use "Activate Account / Set Password" with your one-time activation code first.',
+    });
+    return;
+  }
 
   if (!member || !verifyPassword(password, member.password_hash)) {
     res.status(401).json({ error: 'Invalid credentials.' });
@@ -528,6 +628,73 @@ app.post('/api/auth/login', (req, res) => {
   const cookieFlags = isHttps ? 'SameSite=None; Secure; HttpOnly' : 'SameSite=Lax; HttpOnly';
   res.setHeader('Set-Cookie', `lasupadora_session=${encodeURIComponent(token)}; Path=/; ${cookieFlags}; Max-Age=${7 * 24 * 60 * 60}`);
   recordAudit(member.id, 'AUTH_LOGIN', 'members', member.id);
+  const user = loadAuthContext(member.id);
+  res.json({ success: true, token, user });
+});
+
+app.post('/api/auth/activate', (req, res) => {
+  const { identifier, activation_code, new_password, confirm_password } = req.body as {
+    identifier?: string;
+    activation_code?: string;
+    new_password?: string;
+    confirm_password?: string;
+  };
+  if (!identifier?.trim() || !activation_code?.trim() || !new_password) {
+    res.status(400).json({ error: 'Email or Membership ID, activation code, and new password are required.' });
+    return;
+  }
+  if (new_password.length < 8) {
+    res.status(400).json({ error: 'New password must be at least 8 characters long.' });
+    return;
+  }
+  if (confirm_password !== undefined && new_password !== confirm_password) {
+    res.status(400).json({ error: 'New password and confirmation password do not match.' });
+    return;
+  }
+
+  const member = db
+    .prepare(
+      `SELECT id, membership_status, activation_code_hash, activation_expires_at
+       FROM members
+       WHERE LOWER(email) = LOWER(?) OR UPPER(membership_number) = UPPER(?)`
+    )
+    .get(identifier.trim(), identifier.trim()) as
+    | {
+        id: string;
+        membership_status: string;
+        activation_code_hash: string | null;
+        activation_expires_at: string | null;
+      }
+    | undefined;
+
+  if (!member || !member.activation_code_hash) {
+    res.status(400).json({ error: 'Invalid identifier or no active activation code is on file for this account.' });
+    return;
+  }
+  if (member.membership_status === 'Suspended' || member.membership_status === 'Deceased') {
+    res.status(403).json({ error: `Account is currently ${member.membership_status}. Contact the Secretariat.` });
+    return;
+  }
+  if (member.activation_expires_at && new Date(member.activation_expires_at.replace(' ', 'T') + 'Z').getTime() < Date.now()) {
+    res.status(400).json({ error: 'This activation code has expired. Request a new activation code from your Branch Administrator.' });
+    return;
+  }
+  if (!verifyPassword(activation_code.trim().toUpperCase(), member.activation_code_hash)) {
+    res.status(401).json({ error: 'Incorrect activation code. Please check the code provided by your officer.' });
+    return;
+  }
+
+  db.prepare(
+    `UPDATE members
+     SET password_hash = ?, activation_code_hash = NULL, activation_expires_at = NULL, must_change_password = 0, updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(hashPassword(new_password), member.id);
+
+  recordAudit(member.id, 'AUTH_ACCOUNT_ACTIVATED', 'members', member.id);
+  const token = signSessionToken({ memberId: member.id, exp: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  const cookieFlags = isHttps ? 'SameSite=None; Secure; HttpOnly' : 'SameSite=Lax; HttpOnly';
+  res.setHeader('Set-Cookie', `lasupadora_session=${encodeURIComponent(token)}; Path=/; ${cookieFlags}; Max-Age=${7 * 24 * 60 * 60}`);
   const user = loadAuthContext(member.id);
   res.json({ success: true, token, user });
 });
@@ -780,6 +947,39 @@ app.post('/api/member/notifications/:id/read', requireAuth, (req: AuthedRequest,
   res.json({ success: true });
 });
 
+app.post('/api/member/change-password', requireAuth, (req: AuthedRequest, res) => {
+  const { current_password, new_password, confirm_password } = req.body as {
+    current_password?: string;
+    new_password?: string;
+    confirm_password?: string;
+  };
+  if (!current_password || !new_password) {
+    res.status(400).json({ error: 'Current password and new password are required.' });
+    return;
+  }
+  if (new_password.length < 8) {
+    res.status(400).json({ error: 'New password must be at least 8 characters long.' });
+    return;
+  }
+  if (confirm_password !== undefined && new_password !== confirm_password) {
+    res.status(400).json({ error: 'New password and confirmation password do not match.' });
+    return;
+  }
+  const member = db.prepare(`SELECT password_hash FROM members WHERE id = ?`).get(req.auth!.memberId) as
+    | { password_hash: string | null }
+    | undefined;
+  if (!member || !verifyPassword(current_password, member.password_hash)) {
+    res.status(401).json({ error: 'Current password is incorrect.' });
+    return;
+  }
+  db.prepare(`UPDATE members SET password_hash = ?, must_change_password = 0, updated_at = datetime('now') WHERE id = ?`).run(
+    hashPassword(new_password),
+    req.auth!.memberId
+  );
+  recordAudit(req.auth!.memberId, 'MEMBER_PASSWORD_CHANGED', 'members', req.auth!.memberId);
+  res.json({ success: true, message: 'Your portal password has been updated.' });
+});
+
 // ----------------------------------------------------------------------------
 // 5. ADMIN OVERVIEW & SUPABASE CONFIG STATUS
 // ----------------------------------------------------------------------------
@@ -1006,6 +1206,53 @@ app.patch('/api/admin/members/:id', requirePermission('membership', 'edit'), (re
   res.json({ success: true });
 });
 
+app.post('/api/admin/members/:id/activation-code', requirePermission('membership', 'edit'), (req: AuthedRequest, res) => {
+  const existing = db
+    .prepare(`SELECT id, full_name, membership_number, branch_id, subdivision_id, membership_status FROM members WHERE id = ?`)
+    .get(req.params.id) as
+    | {
+        id: string;
+        full_name: string;
+        membership_number: string;
+        branch_id: string;
+        subdivision_id: string;
+        membership_status: string;
+      }
+    | undefined;
+  if (!existing) {
+    res.status(404).json({ error: 'Member not found.' });
+    return;
+  }
+  if (!canAccessScope(req.auth!, existing.branch_id, existing.subdivision_id)) {
+    res.status(403).json({ error: 'Member is outside your branch/subdivision authorization scope.' });
+    return;
+  }
+  if (existing.membership_status === 'Suspended' || existing.membership_status === 'Deceased') {
+    res.status(400).json({ error: `Cannot issue activation code for a ${existing.membership_status} member.` });
+    return;
+  }
+
+  const activationCode = generateActivationCode();
+  db.prepare(
+    `UPDATE members
+     SET activation_code_hash = ?, activation_expires_at = datetime('now', '+30 days'), must_change_password = 1, updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(hashPassword(activationCode), existing.id);
+
+  recordAudit(req.auth!.memberId, 'MEMBER_ACTIVATION_CODE_ISSUED', 'members', existing.id, {
+    membership_number: existing.membership_number,
+  });
+
+  res.json({
+    success: true,
+    member_id: existing.id,
+    full_name: existing.full_name,
+    membership_number: existing.membership_number,
+    activation_code: activationCode,
+    expires_in_days: 30,
+  });
+});
+
 app.post('/api/admin/members/:id/transfer', requirePermission('membership', 'edit'), (req: AuthedRequest, res) => {
   const { to_branch_id, to_subdivision_id, reason } = req.body;
   if (!to_branch_id || !to_subdivision_id || !reason?.trim()) {
@@ -1195,15 +1442,18 @@ app.post('/api/admin/applications/:id/decision', requirePermission('applications
       const qrToken = crypto.randomBytes(16).toString('hex');
       const memberId = uid();
 
-      // Default temporary activation password hash if portal account is activated
-      const defaultPwdHash = (db.prepare(`SELECT password_hash FROM members LIMIT 1`).get() as { password_hash: string }).password_hash;
+      const applicantPasswordHash = appRow.password_hash || null;
+      const activationCode = applicantPasswordHash ? null : generateActivationCode();
+      const activationCodeHash = activationCode ? hashPassword(activationCode) : null;
+      const activationExpiresAt = activationCode ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ') : null;
 
       db.prepare(
         `INSERT INTO members (
-          id, membership_number, qr_token, full_name, date_of_birth, gender, telephone, email, password_hash, residential_address,
-          photo_url, branch_id, subdivision_id, category_id, membership_status, previous_experience, emergency_contact_name,
-          emergency_contact_phone, approved_by, approved_at, card_valid_until
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?, ?, datetime('now'), '2027-12-31')`
+          id, membership_number, qr_token, full_name, date_of_birth, gender, telephone, email,
+          password_hash, activation_code_hash, activation_expires_at, must_change_password,
+          residential_address, photo_url, branch_id, subdivision_id, category_id, membership_status,
+          previous_experience, emergency_contact_name, emergency_contact_phone, approved_by, approved_at, card_valid_until
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?, ?, ?, ?, datetime('now'), '2027-12-31')`
       ).run(
         memberId,
         membershipNumber,
@@ -1213,7 +1463,10 @@ app.post('/api/admin/applications/:id/decision', requirePermission('applications
         appRow.gender,
         appRow.telephone,
         appRow.email || `${membershipNumber.toLowerCase()}@member.lasupadora.org`,
-        defaultPwdHash,
+        applicantPasswordHash,
+        activationCodeHash,
+        activationExpiresAt,
+        activationCode ? 1 : 0,
         appRow.residential_address,
         appRow.photo_url,
         targetBranchId,
@@ -1235,10 +1488,15 @@ app.post('/api/admin/applications/:id/decision', requirePermission('applications
       );
 
       db.prepare(
-        `UPDATE membership_applications SET status = 'Approved', reviewing_officer_id = ?, reviewed_at = datetime('now'), review_comments = ?, approved_member_id = ?, updated_at = datetime('now') WHERE id = ?`
+        `UPDATE membership_applications SET status = 'Approved', password_hash = NULL, reviewing_officer_id = ?, reviewed_at = datetime('now'), review_comments = ?, approved_member_id = ?, updated_at = datetime('now') WHERE id = ?`
       ).run(req.auth!.memberId, comments || 'Approved and added to official register', memberId, req.params.id);
 
-      createdMember = { id: memberId, membership_number: membershipNumber };
+      createdMember = {
+        id: memberId,
+        membership_number: membershipNumber,
+        password_set_by_applicant: Boolean(applicantPasswordHash),
+        activation_code: activationCode,
+      };
     } else {
       db.prepare(
         `UPDATE membership_applications SET status = ?, reviewing_officer_id = ?, reviewed_at = datetime('now'), review_comments = ?, updated_at = datetime('now') WHERE id = ?`
@@ -1285,7 +1543,7 @@ app.get('/api/admin/branches', requirePermission('branches', 'view'), (_req, res
   res.json({ branches, subdivisions });
 });
 
-app.post('/api/admin/branches', requirePermission('branches', 'create'), (req: AuthedRequest, res) => {
+app.post('/api/admin/branches', requirePermission('branches', 'approve'), (req: AuthedRequest, res) => {
   const { code, name, branch_type, region, description } = req.body;
   if (!code?.trim() || !name?.trim()) {
     res.status(400).json({ error: 'Branch code and name are required.' });
@@ -1486,14 +1744,13 @@ app.get('/api/admin/rbac', requirePermission('rbac', 'view'), (_req, res) => {
   const permissions = db.prepare(`SELECT * FROM role_permissions`).all();
   const assignments = db
     .prepare(
-      `SELECT mr.*, m.full_name, m.membership_number, r.display_name AS role_name, r.slug AS role_slug, b.name AS branch_name, s.name AS subdivision_name
+      `SELECT mr.*, m.full_name, m.membership_number, m.email, r.display_name AS role_name, r.slug AS role_slug, b.name AS branch_name, s.name AS subdivision_name
        FROM member_roles mr
        JOIN members m ON m.id = mr.member_id
        JOIN roles r ON r.id = mr.role_id
        LEFT JOIN branches b ON b.id = mr.branch_id
        LEFT JOIN subdivisions s ON s.id = mr.subdivision_id
-       WHERE mr.is_active = 1
-       ORDER BY m.full_name`
+       ORDER BY mr.is_active DESC, m.full_name ASC`
     )
     .all();
   res.json({ roles, permissions, assignments });
@@ -1518,17 +1775,58 @@ app.post('/api/admin/rbac/assign', requirePermission('rbac', 'manage'), (req: Au
     res.status(400).json({ error: 'Member and role are required.' });
     return;
   }
-  const id = uid();
-  db.prepare(`INSERT INTO member_roles (id, member_id, role_id, branch_id, subdivision_id) VALUES (?, ?, ?, ?, ?)`).run(
-    id,
-    member_id,
-    role_id,
-    branch_id || null,
-    subdivision_id || null
-  );
-  recordAudit(req.auth!.memberId, 'ROLE_ASSIGNED', 'member_roles', id, { member_id, role_id });
-  void syncMemberRoleToSupabase(member_id, role_id, branch_id, subdivision_id);
-  res.status(201).json({ id });
+  const existing = db
+    .prepare(`SELECT id FROM member_roles WHERE member_id = ? AND role_id = ? LIMIT 1`)
+    .get(member_id, role_id) as { id: string } | undefined;
+
+  let assignmentId: string;
+  if (existing) {
+    assignmentId = existing.id;
+    db.prepare(
+      `UPDATE member_roles SET branch_id = ?, subdivision_id = ?, is_active = 1, assigned_at = datetime('now') WHERE id = ?`
+    ).run(branch_id || null, subdivision_id || null, assignmentId);
+  } else {
+    assignmentId = uid();
+    db.prepare(`INSERT INTO member_roles (id, member_id, role_id, branch_id, subdivision_id, is_active) VALUES (?, ?, ?, ?, ?, 1)`).run(
+      assignmentId,
+      member_id,
+      role_id,
+      branch_id || null,
+      subdivision_id || null
+    );
+  }
+  recordAudit(req.auth!.memberId, 'ROLE_ASSIGNED', 'member_roles', assignmentId, { member_id, role_id });
+  void syncMemberRoleToSupabase(member_id, role_id, branch_id, subdivision_id, true);
+  res.status(201).json({ id: assignmentId });
+});
+
+app.patch('/api/admin/rbac/assignments/:id', requirePermission('rbac', 'manage'), (req: AuthedRequest, res) => {
+  const { is_active } = req.body as { is_active?: boolean };
+  const row = db
+    .prepare(
+      `SELECT mr.id, mr.member_id, mr.role_id, mr.branch_id, mr.subdivision_id, r.slug AS role_slug
+       FROM member_roles mr JOIN roles r ON r.id = mr.role_id
+       WHERE mr.id = ?`
+    )
+    .get(req.params.id) as
+    | { id: string; member_id: string; role_id: string; branch_id: string | null; subdivision_id: string | null; role_slug: string }
+    | undefined;
+  if (!row) {
+    res.status(404).json({ error: 'Role assignment not found.' });
+    return;
+  }
+  const nextActive = is_active ? 1 : 0;
+  if (row.member_id === req.auth!.memberId && row.role_slug === 'super_admin' && nextActive === 0) {
+    res.status(400).json({ error: 'You cannot revoke your own Super Administrator assignment.' });
+    return;
+  }
+  db.prepare(`UPDATE member_roles SET is_active = ? WHERE id = ?`).run(nextActive, row.id);
+  recordAudit(req.auth!.memberId, nextActive ? 'ROLE_ASSIGNMENT_ACTIVATED' : 'ROLE_ASSIGNMENT_REVOKED', 'member_roles', row.id, {
+    member_id: row.member_id,
+    role_id: row.role_id,
+  });
+  void syncMemberRoleToSupabase(row.member_id, row.role_id, row.branch_id, row.subdivision_id, Boolean(nextActive));
+  res.json({ success: true, is_active: Boolean(nextActive) });
 });
 
 // ----------------------------------------------------------------------------
@@ -2137,13 +2435,22 @@ app.patch('/api/admin/governance/proposals/:id/decide', requirePermission('gover
   res.json({ success: true });
 });
 
-app.patch('/api/admin/governance/policies/:key', requirePermission('rbac', 'manage'), (req: AuthedRequest, res) => {
-  const { value_json, confirmed } = req.body;
-  db.prepare(`UPDATE governance_policies SET value_json = COALESCE(?, value_json), confirmed = COALESCE(?, confirmed), updated_at = datetime('now') WHERE key = ?`).run(
-    value_json ? JSON.stringify(value_json) : null,
-    confirmed === undefined ? null : confirmed ? 1 : 0,
-    req.params.key
+app.patch('/api/admin/governance/policies/:key', requireAuth, (req: AuthedRequest, res) => {
+  const isSecretariatSettings = req.params.key === 'secretariat_settings';
+  const canEditSecretariat = Boolean(
+    req.auth?.permissions.rbac?.manage || req.auth?.permissions.governance?.edit || req.auth?.permissions.governance?.approve
   );
+  const canEditConstitutional = Boolean(req.auth?.permissions.rbac?.manage || req.auth?.permissions.governance?.approve);
+  if (isSecretariatSettings ? !canEditSecretariat : !canEditConstitutional) {
+    res.status(403).json({ error: 'Forbidden: Insufficient permissions to update this Society policy.' });
+    return;
+  }
+  const { value_json, confirmed } = req.body;
+  const serializedValue =
+    value_json === undefined ? null : typeof value_json === 'string' ? value_json : JSON.stringify(value_json);
+  db.prepare(
+    `UPDATE governance_policies SET value_json = COALESCE(?, value_json), confirmed = COALESCE(?, confirmed), updated_at = datetime('now') WHERE key = ?`
+  ).run(serializedValue, confirmed === undefined ? null : confirmed ? 1 : 0, req.params.key);
   recordAudit(req.auth!.memberId, 'POLICY_UPDATED', 'governance_policies', null, { key: req.params.key, confirmed });
   void syncGovernancePolicyToSupabase(req.params.key, req.auth!.memberId);
   res.json({ success: true });

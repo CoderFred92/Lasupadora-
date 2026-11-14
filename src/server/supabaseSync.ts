@@ -94,6 +94,8 @@ export async function testSupabaseHealth() {
     { count: leadershipCount },
     { count: eventsCount },
     { count: publicationsCount },
+    { count: mediaCount },
+    { count: campaignsCount },
     { count: budgetsCount },
     { count: paymentsCount },
     { count: auditCount },
@@ -103,6 +105,8 @@ export async function testSupabaseHealth() {
     admin.from('leadership_appointments').select('id', { count: 'exact', head: true }),
     admin.from('events').select('id', { count: 'exact', head: true }),
     admin.from('publications').select('id', { count: 'exact', head: true }),
+    admin.from('media_items').select('id', { count: 'exact', head: true }),
+    admin.from('fundraising_campaigns').select('id', { count: 'exact', head: true }),
     admin.from('budgets').select('id', { count: 'exact', head: true }),
     admin.from('financial_payments').select('id', { count: 'exact', head: true }),
     admin.from('audit_logs').select('id', { count: 'exact', head: true }),
@@ -123,6 +127,8 @@ export async function testSupabaseHealth() {
       leadership_appointments: leadershipCount ?? 0,
       events: eventsCount ?? 0,
       publications: publicationsCount ?? 0,
+      media_items: mediaCount ?? 0,
+      fundraising_campaigns: campaignsCount ?? 0,
       budgets: budgetsCount ?? 0,
       financial_payments: paymentsCount ?? 0,
       audit_logs: auditCount ?? 0,
@@ -364,86 +370,103 @@ export async function ensureSupabaseSeeded(): Promise<void> {
   const admin = getSupabaseAdmin();
   if (!admin) return;
   try {
-    const [{ count: memCount }, { count: leadCount }, { count: evtCount }, { count: pubCount }, { count: bdgCount }, { count: payCount }] = await Promise.all([
+    lastSyncError = null;
+    const [
+      { count: memCount },
+      { count: leadCount },
+      { count: evtCount },
+      { count: pubCount },
+      { count: mediaCount },
+      { count: campaignCount },
+      { count: bdgCount },
+      { count: payCount },
+    ] = await Promise.all([
       admin.from('members').select('id', { count: 'exact', head: true }),
       admin.from('leadership_appointments').select('id', { count: 'exact', head: true }),
       admin.from('events').select('id', { count: 'exact', head: true }),
       admin.from('publications').select('id', { count: 'exact', head: true }),
+      admin.from('media_items').select('id', { count: 'exact', head: true }),
+      admin.from('fundraising_campaigns').select('id', { count: 'exact', head: true }),
       admin.from('budgets').select('id', { count: 'exact', head: true }),
       admin.from('financial_payments').select('id', { count: 'exact', head: true }),
     ]);
 
+    const localMembers = db
+      .prepare(`SELECT id, qr_token, membership_number, email, full_name FROM members`)
+      .all() as { id: string; qr_token: string; membership_number: string; email: string | null; full_name: string }[];
+
     if ((memCount ?? 0) === 0) {
-      const members = db.prepare(`SELECT id FROM members`).all() as { id: string }[];
-      for (const m of members) await resolveMemberId(m.id);
+      for (const m of localMembers) await resolveMemberId(m.id);
     } else {
-      // Remove stale duplicate rows in Supabase whose qr_token is absent from SQLite,
-      // reassigning any FK references to the matching canonical Supabase member first,
-      // then sync all local members cleanly.
-      const localMembers = db
-        .prepare(`SELECT id, qr_token, membership_number, email, full_name FROM members`)
-        .all() as { id: string; qr_token: string; membership_number: string; email: string | null; full_name: string }[];
-      const localQrSet = new Set(localMembers.map((m) => m.qr_token));
+      // Match existing remote members cleanly by membership_number or email first,
+      // updating their qr_token & fields rather than deleting active FK-linked rows.
+      const localNumSet = new Set(localMembers.map((m) => m.membership_number.toUpperCase()));
+      const localEmailSet = new Set(localMembers.map((m) => (m.email || '').toLowerCase()).filter(Boolean));
       const { data: remoteMembers } = await admin.from('members').select('id, qr_token, membership_number, email, full_name');
       if (remoteMembers) {
-        const keptRows = remoteMembers.filter((rm) => rm.qr_token && localQrSet.has(rm.qr_token));
-        const fallbackKeptId = keptRows[0]?.id || null;
+        const canonicalByKey = new Map<string, string>();
         for (const rm of remoteMembers) {
-          if (!rm.qr_token || !localQrSet.has(rm.qr_token)) {
-            const matchedKept =
-              keptRows.find((k) => rm.email && k.email && k.email.toLowerCase() === rm.email.toLowerCase()) ||
-              keptRows.find((k) => k.membership_number === rm.membership_number) ||
-              keptRows.find((k) => k.full_name.toLowerCase() === rm.full_name.toLowerCase()) ||
-              null;
-            const replacementId = matchedKept?.id || fallbackKeptId;
-
-            await admin.from('member_roles').delete().eq('member_id', rm.id);
-            await admin.from('event_registrations').delete().eq('member_id', rm.id);
-            await admin.from('notifications').delete().eq('member_id', rm.id);
-            await admin.from('profile_change_requests').delete().eq('member_id', rm.id);
-            await admin.from('auth_profiles').update({ member_id: replacementId }).eq('member_id', rm.id);
-            await admin.from('audit_logs').update({ actor_member_id: replacementId }).eq('actor_member_id', rm.id);
-            await admin.from('members').update({ approved_by: null }).eq('approved_by', rm.id);
-            await admin.from('member_roles').update({ assigned_by: null }).eq('assigned_by', rm.id);
-            await admin.from('membership_applications').update({ created_by_officer_id: null }).eq('created_by_officer_id', rm.id);
-            await admin.from('membership_applications').update({ reviewing_officer_id: null }).eq('reviewing_officer_id', rm.id);
-            await admin.from('membership_applications').update({ approved_member_id: null }).eq('approved_member_id', rm.id);
-            await admin.from('application_decision_history').update({ actor_member_id: replacementId }).eq('actor_member_id', rm.id);
-            await admin.from('member_feedback_and_inquiries').update({ member_id: replacementId }).eq('member_id', rm.id);
-            await admin.from('member_feedback_and_inquiries').update({ responded_by: replacementId }).eq('responded_by', rm.id);
-            await admin.from('events').update({ created_by: replacementId }).eq('created_by', rm.id);
-            await admin.from('publications').update({ author_id: replacementId }).eq('author_id', rm.id);
-            await admin.from('publications').update({ approved_by: replacementId }).eq('approved_by', rm.id);
-            await admin.from('media_items').update({ uploaded_by: replacementId }).eq('uploaded_by', rm.id);
-            await admin.from('dues_schedules').update({ created_by: replacementId }).eq('created_by', rm.id);
-            await admin.from('fundraising_campaigns').update({ created_by: replacementId }).eq('created_by', rm.id);
-            await admin.from('governance_meetings').update({ created_by: replacementId }).eq('created_by', rm.id);
-            await admin.from('governance_policies').update({ updated_by: replacementId }).eq('updated_by', rm.id);
-            await admin.from('financial_payments').update({ recording_officer_id: replacementId }).eq('recording_officer_id', rm.id);
-            await admin.from('financial_payments').update({ verified_by_id: replacementId }).eq('verified_by_id', rm.id);
-
-            if (replacementId) {
-              await admin.from('leadership_appointments').update({ member_id: replacementId }).eq('member_id', rm.id);
-              await admin.from('leadership_appointments').update({ appointed_by: replacementId }).eq('appointed_by', rm.id);
-              await admin.from('member_transfers').update({ member_id: replacementId }).eq('member_id', rm.id);
-              await admin.from('member_transfers').update({ approved_by: replacementId }).eq('approved_by', rm.id);
-              await admin.from('financial_payments').update({ member_id: replacementId }).eq('member_id', rm.id);
-              await admin.from('budgets').update({ submitted_by: replacementId }).eq('submitted_by', rm.id);
-              await admin.from('budgets').update({ approved_by: replacementId }).eq('approved_by', rm.id);
-              await admin.from('expenditures').update({ requested_by: replacementId }).eq('requested_by', rm.id);
-              await admin.from('expenditures').update({ approved_by: replacementId }).eq('approved_by', rm.id);
-              await admin.from('governance_proposals').update({ submitted_by: replacementId }).eq('submitted_by', rm.id);
-              await admin.from('governance_proposals').update({ reviewed_by: replacementId }).eq('reviewed_by', rm.id);
-              await admin.from('governance_proposals').update({ decided_by: replacementId }).eq('decided_by', rm.id);
-              await admin.from('governance_votes').delete().eq('member_id', rm.id);
-              await admin.from('governance_action_points').update({ assigned_to: replacementId }).eq('assigned_to', rm.id);
-            }
-
-            const { error: delErr } = await admin.from('members').delete().eq('id', rm.id);
-            if (delErr) {
-              lastSyncError = `stale member cleanup (${rm.id}): ${delErr.message}`;
-            }
+          const numKey = (rm.membership_number || '').toUpperCase();
+          const emailKey = (rm.email || '').toLowerCase();
+          if (numKey && localNumSet.has(numKey) && !canonicalByKey.has(`num:${numKey}`)) {
+            canonicalByKey.set(`num:${numKey}`, rm.id);
           }
+          if (emailKey && localEmailSet.has(emailKey) && !canonicalByKey.has(`email:${emailKey}`)) {
+            canonicalByKey.set(`email:${emailKey}`, rm.id);
+          }
+        }
+        // Only remove remote rows that are duplicate or orphaned when a canonical replacement row exists
+        for (const rm of remoteMembers) {
+          const numKey = (rm.membership_number || '').toUpperCase();
+          const emailKey = (rm.email || '').toLowerCase();
+          const isMatchedNum = numKey && localNumSet.has(numKey) && canonicalByKey.get(`num:${numKey}`) === rm.id;
+          const isMatchedEmail = emailKey && localEmailSet.has(emailKey) && canonicalByKey.get(`email:${emailKey}`) === rm.id;
+          if (isMatchedNum || isMatchedEmail) continue;
+
+          const replacementId =
+            (numKey ? canonicalByKey.get(`num:${numKey}`) : undefined) ||
+            (emailKey ? canonicalByKey.get(`email:${emailKey}`) : undefined) ||
+            null;
+          if (!replacementId) continue;
+
+          await admin.from('member_roles').delete().eq('member_id', rm.id);
+          await admin.from('event_registrations').delete().eq('member_id', rm.id);
+          await admin.from('notifications').delete().eq('member_id', rm.id);
+          await admin.from('profile_change_requests').delete().eq('member_id', rm.id);
+          await admin.from('audit_logs').update({ actor_member_id: replacementId }).eq('actor_member_id', rm.id);
+          await admin.from('members').update({ approved_by: null }).eq('approved_by', rm.id);
+          await admin.from('member_roles').update({ assigned_by: null }).eq('assigned_by', rm.id);
+          await admin.from('membership_applications').update({ created_by_officer_id: null }).eq('created_by_officer_id', rm.id);
+          await admin.from('membership_applications').update({ reviewing_officer_id: null }).eq('reviewing_officer_id', rm.id);
+          await admin.from('membership_applications').update({ approved_member_id: null }).eq('approved_member_id', rm.id);
+          await admin.from('application_decision_history').update({ actor_member_id: replacementId }).eq('actor_member_id', rm.id);
+          await admin.from('member_feedback_and_inquiries').update({ member_id: replacementId }).eq('member_id', rm.id);
+          await admin.from('member_feedback_and_inquiries').update({ responded_by: replacementId }).eq('responded_by', rm.id);
+          await admin.from('events').update({ created_by: replacementId }).eq('created_by', rm.id);
+          await admin.from('publications').update({ author_id: replacementId }).eq('author_id', rm.id);
+          await admin.from('publications').update({ approved_by: replacementId }).eq('approved_by', rm.id);
+          await admin.from('media_items').update({ uploaded_by: replacementId }).eq('uploaded_by', rm.id);
+          await admin.from('dues_schedules').update({ created_by: replacementId }).eq('created_by', rm.id);
+          await admin.from('fundraising_campaigns').update({ created_by: replacementId }).eq('created_by', rm.id);
+          await admin.from('governance_meetings').update({ created_by: replacementId }).eq('created_by', rm.id);
+          await admin.from('governance_policies').update({ updated_by: replacementId }).eq('updated_by', rm.id);
+          await admin.from('financial_payments').update({ recording_officer_id: replacementId }).eq('recording_officer_id', rm.id);
+          await admin.from('financial_payments').update({ verified_by_id: replacementId }).eq('verified_by_id', rm.id);
+          await admin.from('leadership_appointments').update({ member_id: replacementId }).eq('member_id', rm.id);
+          await admin.from('leadership_appointments').update({ appointed_by: replacementId }).eq('appointed_by', rm.id);
+          await admin.from('member_transfers').update({ member_id: replacementId }).eq('member_id', rm.id);
+          await admin.from('member_transfers').update({ approved_by: replacementId }).eq('approved_by', rm.id);
+          await admin.from('financial_payments').update({ member_id: replacementId }).eq('member_id', rm.id);
+          await admin.from('budgets').update({ submitted_by: replacementId }).eq('submitted_by', rm.id);
+          await admin.from('budgets').update({ approved_by: replacementId }).eq('approved_by', rm.id);
+          await admin.from('expenditures').update({ requested_by: replacementId }).eq('requested_by', rm.id);
+          await admin.from('expenditures').update({ approved_by: replacementId }).eq('approved_by', rm.id);
+          await admin.from('governance_proposals').update({ submitted_by: replacementId }).eq('submitted_by', rm.id);
+          await admin.from('governance_proposals').update({ reviewed_by: replacementId }).eq('reviewed_by', rm.id);
+          await admin.from('governance_proposals').update({ decided_by: replacementId }).eq('decided_by', rm.id);
+          await admin.from('governance_votes').delete().eq('member_id', rm.id);
+          await admin.from('governance_action_points').update({ assigned_to: replacementId }).eq('assigned_to', rm.id);
+          await admin.from('members').delete().eq('id', rm.id);
         }
       }
       for (const m of localMembers) {
@@ -465,6 +488,30 @@ export async function ensureSupabaseSeeded(): Promise<void> {
       const pubs = db.prepare(`SELECT id FROM publications`).all() as { id: string }[];
       for (const p of pubs) await syncPublicationToSupabase(p.id);
     }
+
+    if ((mediaCount ?? 0) === 0) {
+      const media = db.prepare(`SELECT id FROM media_items`).all() as { id: string }[];
+      for (const m of media) await syncMediaItemToSupabase(m.id);
+    }
+
+    if ((campaignCount ?? 0) === 0) {
+      const campaigns = db.prepare(`SELECT * FROM fundraising_campaigns`).all() as Record<string, string | number | null>[];
+      for (const c of campaigns) {
+        const sbBranchId = await resolveBranchId(c.branch_id as string | null);
+        await admin.from('fundraising_campaigns').insert({
+          title: c.title,
+          description: c.description || null,
+          target_amount_ghs: Number(c.target_amount_ghs),
+          start_date: c.start_date,
+          end_date: c.end_date || null,
+          branch_id: sbBranchId,
+          status: c.status || 'Active',
+        });
+      }
+    }
+
+    // Ensure secretariat_settings policy exists remotely if absent
+    await syncGovernancePolicyToSupabase('secretariat_settings');
 
     if ((bdgCount ?? 0) === 0) {
       const budgets = db.prepare(`SELECT id FROM budgets`).all() as { id: string }[];
@@ -801,7 +848,13 @@ export async function syncRbacPermissionToSupabase(localRoleId: string, module: 
   } catch {}
 }
 
-export async function syncMemberRoleToSupabase(localMemberId: string, localRoleId: string, localBranchId?: string | null, localSubId?: string | null) {
+export async function syncMemberRoleToSupabase(
+  localMemberId: string,
+  localRoleId: string,
+  localBranchId?: string | null,
+  localSubId?: string | null,
+  isActive = true
+) {
   const admin = getSupabaseAdmin();
   if (!admin) return;
   try {
@@ -812,13 +865,26 @@ export async function syncMemberRoleToSupabase(localMemberId: string, localRoleI
       resolveSubdivisionId(localSubId),
     ]);
     if (!sbMemberId || !sbRoleId) return;
-    await admin.from('member_roles').insert({
-      member_id: sbMemberId,
-      role_id: sbRoleId,
-      branch_id: sbBranchId,
-      subdivision_id: sbSubId,
-      is_active: true,
-    });
+    const { data: existing } = await admin
+      .from('member_roles')
+      .select('id')
+      .eq('member_id', sbMemberId)
+      .eq('role_id', sbRoleId)
+      .maybeSingle();
+    if (existing?.id) {
+      await admin
+        .from('member_roles')
+        .update({ branch_id: sbBranchId, subdivision_id: sbSubId, is_active: Boolean(isActive) })
+        .eq('id', existing.id);
+    } else {
+      await admin.from('member_roles').insert({
+        member_id: sbMemberId,
+        role_id: sbRoleId,
+        branch_id: sbBranchId,
+        subdivision_id: sbSubId,
+        is_active: Boolean(isActive),
+      });
+    }
   } catch {}
 }
 
@@ -1150,14 +1216,19 @@ export async function syncGovernancePolicyToSupabase(policyKey: string, actorLoc
     const row = db.prepare(`SELECT * FROM governance_policies WHERE key = ?`).get(policyKey) as Record<string, string | number | null> | undefined;
     if (!row) return;
     const sbUpdaterId = await resolveMemberId(actorLocalId || null);
-    await admin
-      .from('governance_policies')
-      .update({
+    await admin.from('governance_policies').upsert(
+      {
+        key: policyKey,
+        category: String(row.category || 'operations'),
+        label: String(row.label || policyKey),
         value_json: JSON.parse(String(row.value_json || '{}')),
+        requires_constitutional_confirmation: Boolean(row.requires_constitutional_confirmation),
+        confirmed: Boolean(row.confirmed),
         updated_by: sbUpdaterId,
         updated_at: new Date().toISOString(),
-      })
-      .eq('key', policyKey);
+      },
+      { onConflict: 'key' }
+    );
   } catch {}
 }
 

@@ -226,7 +226,7 @@ export const AdminDashboard: React.FC<{
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="border-b border-slate-200 bg-white px-6 py-4 flex flex-wrap items-center justify-between gap-4 no-print">
+        <header className="border-b border-slate-200 bg-white px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-4 no-print">
           <div className="text-xs text-slate-500">
             <span>LASUPADORA 360</span>
             <span aria-hidden="true"> / </span>
@@ -242,7 +242,7 @@ export const AdminDashboard: React.FC<{
           </div>
         </header>
 
-        <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto">
           {tab === 'overview' && (
             <div className="space-y-8">
               <div>

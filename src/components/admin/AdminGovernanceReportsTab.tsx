@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Download, FileSpreadsheet, ShieldCheck } from 'lucide-react';
+import { Download, FileSpreadsheet, UserPlus } from 'lucide-react';
 import { apiFetch, formatDate, formatGHS } from '../../lib/api';
 import { exportTableToPDF, exportToExcel } from '../../lib/exportUtils';
-import type { AuthUser, Branch } from '../../types';
+import type { AuthUser, Branch, MemberRecord } from '../../types';
 
 const CHART_COLORS = ['#053559', '#BD5016', '#AD220B', '#146B3A', '#E48947'];
 
@@ -11,7 +11,7 @@ export const AdminGovernanceReportsTab: React.FC<{
   user: AuthUser;
   branches: Branch[];
   mode: 'governance' | 'rbac' | 'reports';
-}> = ({ user, mode }) => {
+}> = ({ user, branches, mode }) => {
   const [govData, setGovData] = useState<{
     meetings: Record<string, string | number>[];
     proposals: Record<string, string | number>[];
@@ -23,8 +23,35 @@ export const AdminGovernanceReportsTab: React.FC<{
   const [rbacData, setRbacData] = useState<{
     roles: { id: string; slug: string; display_name: string; scope_level: string; is_constitutional_office: number; description: string }[];
     permissions: { role_id: string; module: string; can_view: number; can_create: number; can_edit: number; can_approve: number; can_export: number; can_manage: number }[];
-    assignments: Record<string, string>[];
+    assignments: {
+      id: string;
+      member_id: string;
+      role_id: string;
+      branch_id: string | null;
+      subdivision_id: string | null;
+      is_active: number;
+      full_name: string;
+      membership_number: string;
+      email: string | null;
+      role_name: string;
+      role_slug: string;
+      branch_name: string | null;
+      subdivision_name: string | null;
+    }[];
   } | null>(null);
+
+  const [members, setMembers] = useState<MemberRecord[]>([]);
+  const [assignForm, setAssignForm] = useState({ member_id: '', role_id: '', branch_id: '' });
+
+  const [secretariatForm, setSecretariatForm] = useState({
+    secretariat_address: '',
+    secretariat_email: '',
+    secretariat_phone: '',
+    office_hours: '',
+    show_demo_notice: true,
+    demo_notice_text: '',
+  });
+  const [savingSecretariat, setSavingSecretariat] = useState(false);
 
   const [reports, setReports] = useState<{
     membersByBranch: { branch_name: string; total_members: number; active_members: number }[];
@@ -45,11 +72,36 @@ export const AdminGovernanceReportsTab: React.FC<{
       if (mode === 'governance' && user.permissions.governance?.view) {
         const g = await apiFetch<typeof govData>('/api/admin/governance');
         setGovData(g);
+        const secPol = g?.policies.find((p) => p.key === 'secretariat_settings');
+        if (secPol) {
+          try {
+            const parsed = JSON.parse(secPol.value_json);
+            setSecretariatForm({
+              secretariat_address: String(parsed.secretariat_address || ''),
+              secretariat_email: String(parsed.secretariat_email || ''),
+              secretariat_phone: String(parsed.secretariat_phone || ''),
+              office_hours: String(parsed.office_hours || ''),
+              show_demo_notice: parsed.show_demo_notice !== false,
+              demo_notice_text: String(parsed.demo_notice_text || ''),
+            });
+          } catch {}
+        }
       }
       if (mode === 'rbac' && user.permissions.rbac?.view) {
-        const r = await apiFetch<typeof rbacData>('/api/admin/rbac');
+        const [r, mRes] = await Promise.all([
+          apiFetch<typeof rbacData>('/api/admin/rbac'),
+          user.permissions.membership?.view
+            ? apiFetch<{ members: MemberRecord[] }>('/api/admin/members')
+            : Promise.resolve({ members: [] as MemberRecord[] }),
+        ]);
         setRbacData(r);
+        setMembers(mRes.members || []);
         if (r?.roles[0] && !selectedRoleId) setSelectedRoleId(r.roles[0].id);
+        setAssignForm((prev) => ({
+          member_id: prev.member_id || mRes.members?.[0]?.id || '',
+          role_id: prev.role_id || r?.roles[0]?.id || '',
+          branch_id: prev.branch_id,
+        }));
       }
       if (mode === 'reports' && user.permissions.reports?.view) {
         const rep = await apiFetch<typeof reports>('/api/admin/reports');
@@ -118,14 +170,78 @@ export const AdminGovernanceReportsTab: React.FC<{
     }
   };
 
-  const confirmPolicy = async (key: string, confirmed: boolean) => {
-    await apiFetch(`/api/admin/governance/policies/${key}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ confirmed }),
-    });
-    setMsg(`Policy "${key}" updated.`);
-    await loadData();
+  const assignUserRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!assignForm.member_id || !assignForm.role_id) return;
+    setErr(null);
+    setMsg(null);
+    try {
+      await apiFetch('/api/admin/rbac/assign', {
+        method: 'POST',
+        body: JSON.stringify({
+          member_id: assignForm.member_id,
+          role_id: assignForm.role_id,
+          branch_id: assignForm.branch_id || null,
+        }),
+      });
+      setMsg('Authorised user role assignment saved.');
+      await loadData();
+    } catch (e) {
+      setErr((e as Error).message);
+    }
   };
+
+  const toggleRoleAssignment = async (assignmentId: string, currentActive: number) => {
+    setErr(null);
+    setMsg(null);
+    try {
+      await apiFetch(`/api/admin/rbac/assignments/${assignmentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_active: !currentActive }),
+      });
+      setMsg(currentActive ? 'Role assignment revoked.' : 'Role assignment reactivated.');
+      await loadData();
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+
+  const confirmPolicy = async (key: string, confirmed: boolean) => {
+    setErr(null);
+    try {
+      await apiFetch(`/api/admin/governance/policies/${key}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ confirmed }),
+      });
+      setMsg(`Policy "${key}" updated.`);
+      await loadData();
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+
+  const saveSecretariatSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingSecretariat(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      await apiFetch('/api/admin/governance/policies/secretariat_settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ value_json: secretariatForm }),
+      });
+      setMsg('Public Secretariat details and demonstration notice settings saved.');
+      await loadData();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSavingSecretariat(false);
+    }
+  };
+
+  const canEditSecretariat = Boolean(
+    user.permissions.rbac?.manage || user.permissions.governance?.edit || user.permissions.governance?.approve
+  );
 
   return (
     <div className="space-y-6">
@@ -175,6 +291,78 @@ export const AdminGovernanceReportsTab: React.FC<{
             </div>
 
             <div className="lg:col-span-4 space-y-6">
+              {canEditSecretariat && (
+                <form onSubmit={saveSecretariatSettings} className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-[#10242F]">Public Secretariat &amp; Demo Notice</h3>
+                    <p className="text-[11px] text-slate-500">
+                      Controls official contact details on the public Contact page and Footer, plus Stage 1 demonstration notices.
+                    </p>
+                  </div>
+                  <div className="space-y-2 text-xs">
+                    <div>
+                      <label className="block font-semibold text-[#10242F]">Secretariat Address</label>
+                      <input
+                        type="text"
+                        required
+                        value={secretariatForm.secretariat_address}
+                        onChange={(e) => setSecretariatForm({ ...secretariatForm, secretariat_address: e.target.value })}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-[#10242F]">Official Email</label>
+                      <input
+                        type="email"
+                        required
+                        value={secretariatForm.secretariat_email}
+                        onChange={(e) => setSecretariatForm({ ...secretariatForm, secretariat_email: e.target.value })}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-[#10242F]">Secretariat Telephone</label>
+                      <input
+                        type="text"
+                        value={secretariatForm.secretariat_phone}
+                        onChange={(e) => setSecretariatForm({ ...secretariatForm, secretariat_phone: e.target.value })}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-[#10242F]">Office Hours</label>
+                      <input
+                        type="text"
+                        value={secretariatForm.office_hours}
+                        onChange={(e) => setSecretariatForm({ ...secretariatForm, office_hours: e.target.value })}
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5"
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 pt-1 font-semibold text-[#10242F]">
+                      <input
+                        type="checkbox"
+                        checked={secretariatForm.show_demo_notice}
+                        onChange={(e) => setSecretariatForm({ ...secretariatForm, show_demo_notice: e.target.checked })}
+                      />
+                      Show Demonstration-in-Development Notice on Public Site
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={secretariatForm.demo_notice_text}
+                      onChange={(e) => setSecretariatForm({ ...secretariatForm, demo_notice_text: e.target.value })}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-[11px]"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={savingSecretariat}
+                    className="w-full rounded-lg bg-[#053559] py-2 text-xs font-semibold text-white hover:bg-[#10242F] disabled:opacity-50 cursor-pointer"
+                  >
+                    {savingSecretariat ? 'Saving...' : 'Save Secretariat Settings'}
+                  </button>
+                </form>
+              )}
+
               {user.permissions.governance?.create && (
                 <form onSubmit={submitProposal} className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
                   <h3 className="text-sm font-bold text-[#10242F]">Submit Motion or Proposal</h3>
@@ -191,22 +379,24 @@ export const AdminGovernanceReportsTab: React.FC<{
                 <h3 className="text-sm font-bold text-[#10242F]">Configurable Constitutional Policies</h3>
                 <p className="text-[11px] text-slate-500">Rules unconfirmed by the Constitution are flagged clearly for Society ratification.</p>
                 <div className="divide-y divide-slate-100 text-xs">
-                  {govData.policies.map((pol) => (
-                    <div key={pol.key} className="py-2.5 space-y-1">
-                      <div className="flex justify-between gap-2">
-                        <span className="font-semibold text-[#10242F]">{pol.label}</span>
-                        <span className={pol.confirmed ? 'text-[#146B3A] font-semibold' : 'text-amber-700 font-semibold'}>
-                          {pol.confirmed ? 'Confirmed' : 'Pending Ratification'}
-                        </span>
+                  {govData.policies
+                    .filter((pol) => pol.key !== 'secretariat_settings')
+                    .map((pol) => (
+                      <div key={pol.key} className="py-2.5 space-y-1">
+                        <div className="flex justify-between gap-2">
+                          <span className="font-semibold text-[#10242F]">{pol.label}</span>
+                          <span className={pol.confirmed ? 'text-[#146B3A] font-semibold' : 'text-amber-700 font-semibold'}>
+                            {pol.confirmed ? 'Confirmed' : 'Pending Ratification'}
+                          </span>
+                        </div>
+                        <p className="font-mono-tabular text-[11px] text-slate-500 break-all">{pol.value_json}</p>
+                        {(user.permissions.rbac?.manage || user.permissions.governance?.approve) && !pol.confirmed && (
+                          <button type="button" onClick={() => confirmPolicy(pol.key, true)} className="text-[11px] font-semibold text-[#053559] hover:underline cursor-pointer">
+                            Mark Constitutionally Confirmed
+                          </button>
+                        )}
                       </div>
-                      <p className="font-mono-tabular text-[11px] text-slate-500 break-all">{pol.value_json}</p>
-                      {user.permissions.rbac?.manage && !pol.confirmed && (
-                        <button type="button" onClick={() => confirmPolicy(pol.key, true)} className="text-[11px] font-semibold text-[#053559] hover:underline cursor-pointer">
-                          Mark Constitutionally Confirmed
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                    ))}
                 </div>
               </div>
             </div>
@@ -254,7 +444,7 @@ export const AdminGovernanceReportsTab: React.FC<{
         </div>
       )}
 
-      {/* RBAC MATRIX MODULE */}
+      {/* RBAC MATRIX & AUTHORISED USERS MODULE */}
       {mode === 'rbac' && rbacData && (
         <div className="space-y-6">
           <div className="rounded-xl border border-slate-200 bg-white p-5">
@@ -304,6 +494,121 @@ export const AdminGovernanceReportsTab: React.FC<{
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-12">
+            <div className="lg:col-span-8 rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+              <div>
+                <h3 className="font-display text-lg font-bold text-[#10242F]">Authorised Users &amp; Role Assignments</h3>
+                <p className="text-xs text-slate-600">
+                  Lists every member holding administrative, executive, branch, or portal access roles.
+                </p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-200 bg-slate-50 text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2.5 font-semibold">Member</th>
+                      <th className="px-3 py-2.5 font-semibold">Role</th>
+                      <th className="px-3 py-2.5 font-semibold">Scope</th>
+                      <th className="px-3 py-2.5 font-semibold">Status</th>
+                      {user.permissions.rbac?.manage && <th className="px-3 py-2.5 font-semibold text-right">Action</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {rbacData.assignments.map((a) => (
+                      <tr key={a.id} className="hover:bg-slate-50/70">
+                        <td className="px-3 py-2.5">
+                          <p className="font-semibold text-[#10242F]">{a.full_name}</p>
+                          <p className="font-mono-tabular text-[11px] text-slate-500">{a.membership_number}</p>
+                        </td>
+                        <td className="px-3 py-2.5 font-semibold text-[#053559]">{a.role_name}</td>
+                        <td className="px-3 py-2.5 text-slate-600">{a.branch_name || a.subdivision_name || 'National'}</td>
+                        <td className="px-3 py-2.5">
+                          <span className={`font-semibold ${a.is_active ? 'text-[#146B3A]' : 'text-slate-400'}`}>
+                            {a.is_active ? 'Active' : 'Revoked'}
+                          </span>
+                        </td>
+                        {user.permissions.rbac?.manage && (
+                          <td className="px-3 py-2.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => toggleRoleAssignment(a.id, a.is_active)}
+                              className={`rounded border px-2.5 py-1 text-[11px] font-semibold cursor-pointer ${
+                                a.is_active
+                                  ? 'border-red-200 text-[#AD220B] hover:bg-red-50'
+                                  : 'border-emerald-200 text-[#146B3A] hover:bg-emerald-50'
+                              }`}
+                            >
+                              {a.is_active ? 'Revoke' : 'Reactivate'}
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {user.permissions.rbac?.manage && (
+              <form onSubmit={assignUserRole} className="lg:col-span-4 rounded-xl border border-slate-200 bg-white p-5 space-y-3 h-fit">
+                <div className="flex items-center gap-2">
+                  <UserPlus className="h-4 w-4 text-[#BD5016]" />
+                  <h3 className="text-sm font-bold text-[#10242F]">Assign Role to Member</h3>
+                </div>
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <label className="block font-semibold text-[#10242F]">Select Member *</label>
+                    <select
+                      required
+                      value={assignForm.member_id}
+                      onChange={(e) => setAssignForm({ ...assignForm, member_id: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                    >
+                      {members.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.full_name} ({m.membership_number})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-[#10242F]">Role *</label>
+                    <select
+                      required
+                      value={assignForm.role_id}
+                      onChange={(e) => setAssignForm({ ...assignForm, role_id: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                    >
+                      {rbacData.roles.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.display_name} ({r.scope_level})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-semibold text-[#10242F]">Branch Scope (Optional)</label>
+                    <select
+                      value={assignForm.branch_id}
+                      onChange={(e) => setAssignForm({ ...assignForm, branch_id: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+                    >
+                      <option value="">National / Unscoped</option>
+                      {branches.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <button type="submit" className="w-full rounded-lg bg-[#BD5016] py-2 text-xs font-semibold text-white hover:bg-[#9D4010] cursor-pointer">
+                  Assign Role
+                </button>
+              </form>
+            )}
           </div>
         </div>
       )}

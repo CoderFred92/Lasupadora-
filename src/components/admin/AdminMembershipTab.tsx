@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowRightLeft, Camera, CreditCard, Download, FileSpreadsheet, Pencil, Search, UserPlus, X } from 'lucide-react';
+import { ArrowRightLeft, Camera, CreditCard, Download, FileSpreadsheet, KeyRound, Pencil, Search, UserPlus, X } from 'lucide-react';
 import { apiFetch, formatDate, formatGHS } from '../../lib/api';
 import { exportTableToPDF, exportToExcel } from '../../lib/exportUtils';
 import { MembershipIDCard } from '../MembershipIDCard';
@@ -114,6 +114,12 @@ export const AdminMembershipTab: React.FC<{
   });
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [customMemberIds, setCustomMemberIds] = useState<Record<string, string>>({});
+  const [issuedCredential, setIssuedCredential] = useState<{
+    fullName: string;
+    membershipNumber: string;
+    activationCode: string;
+  } | null>(null);
+  const [issuingCode, setIssuingCode] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -260,6 +266,7 @@ export const AdminMembershipTab: React.FC<{
   const handleApplicationDecision = async (app: ApplicationRecord, decision: 'Approved' | 'Corrections Requested' | 'Rejected') => {
     setErr(null);
     setMsg(null);
+    setIssuedCredential(null);
     const prefix = getExpectedMembershipPrefix(app.preferred_branch_id, app.preferred_subdivision_id, branches, subdivisions);
     const suffix = (customMemberIds[app.id] || '').trim();
     if (decision === 'Approved' && suffix && !suffix.replace(/^[-_/.\s]+/, '').trim()) {
@@ -267,7 +274,13 @@ export const AdminMembershipTab: React.FC<{
       return;
     }
     try {
-      const res = await apiFetch<{ createdMember?: { membership_number: string } }>(`/api/admin/applications/${app.id}/decision`, {
+      const res = await apiFetch<{
+        createdMember?: {
+          membership_number: string;
+          password_set_by_applicant?: boolean;
+          activation_code?: string | null;
+        };
+      }>(`/api/admin/applications/${app.id}/decision`, {
         method: 'POST',
         body: JSON.stringify({
           decision,
@@ -275,14 +288,50 @@ export const AdminMembershipTab: React.FC<{
           ...(decision === 'Approved' && suffix ? { membership_number: buildPrefixedId(suffix, prefix) } : {}),
         }),
       });
-      setMsg(
-        decision === 'Approved' && res.createdMember
-          ? `Application approved! Issued permanent Membership ID ${res.createdMember.membership_number}.`
-          : `Application updated to ${decision}.`
-      );
+      if (decision === 'Approved' && res.createdMember) {
+        if (res.createdMember.activation_code) {
+          setIssuedCredential({
+            fullName: app.full_name,
+            membershipNumber: res.createdMember.membership_number,
+            activationCode: res.createdMember.activation_code,
+          });
+          setMsg(
+            `Application approved! Issued Membership ID ${res.createdMember.membership_number}. Share the one-time activation code below with the member.`
+          );
+        } else {
+          setMsg(
+            `Application approved! Issued permanent Membership ID ${res.createdMember.membership_number}. The member can now sign in with the password they created.`
+          );
+        }
+      } else {
+        setMsg(`Application updated to ${decision}.`);
+      }
       await loadAll();
     } catch (e) {
       setErr((e as Error).message);
+    }
+  };
+
+  const handleIssueActivationCode = async (member: MemberRecord) => {
+    setIssuingCode(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const res = await apiFetch<{
+        full_name: string;
+        membership_number: string;
+        activation_code: string;
+      }>(`/api/admin/members/${member.id}/activation-code`, { method: 'POST' });
+      setIssuedCredential({
+        fullName: res.full_name,
+        membershipNumber: res.membership_number,
+        activationCode: res.activation_code,
+      });
+      setMsg(`One-time activation code issued for ${res.full_name} (${res.membership_number}). Valid for 30 days.`);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setIssuingCode(false);
     }
   };
 
@@ -396,6 +445,30 @@ export const AdminMembershipTab: React.FC<{
 
       {msg && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-[#146B3A]">{msg}</div>}
       {err && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-[#AD220B]">{err}</div>}
+      {issuedCredential && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-[#10242F] flex flex-wrap items-center justify-between gap-4">
+          <div className="space-y-1">
+            <p className="font-bold text-amber-900 flex items-center gap-1.5">
+              <KeyRound className="h-4 w-4" />
+              One-Time Member Activation Credential — {issuedCredential.fullName}
+            </p>
+            <p className="text-slate-700">
+              Membership ID: <strong className="font-mono-tabular">{issuedCredential.membershipNumber}</strong> · Activation Code:{' '}
+              <strong className="font-mono-tabular text-[#AD220B]">{issuedCredential.activationCode}</strong>
+            </p>
+            <p className="text-[11px] text-slate-600">
+              Give these details to the member so they can open <strong>Member Login → Activate Account / Set Password</strong> and set their own password.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIssuedCredential(null)}
+            className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-900 hover:bg-amber-100 cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* REGISTER VIEW */}
       {subView === 'register' && (
@@ -924,21 +997,32 @@ export const AdminMembershipTab: React.FC<{
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
               <button
                 type="button"
-                onClick={() => setEditingMember(null)}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                disabled={issuingCode}
+                onClick={() => handleIssueActivationCode(editingMember)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#053559] px-3.5 py-2 text-xs font-semibold text-[#053559] hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
               >
-                Cancel
+                <KeyRound className="h-3.5 w-3.5" />
+                {issuingCode ? 'Issuing Code...' : 'Issue One-Time Activation Code'}
               </button>
-              <button
-                type="submit"
-                disabled={savingMemberEdit}
-                className="rounded-lg bg-[#BD5016] px-5 py-2 text-xs font-semibold text-white hover:bg-[#9D4010] disabled:opacity-50 cursor-pointer"
-              >
-                {savingMemberEdit ? 'Saving...' : 'Save Member Details'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingMember(null)}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingMemberEdit}
+                  className="rounded-lg bg-[#BD5016] px-5 py-2 text-xs font-semibold text-white hover:bg-[#9D4010] disabled:opacity-50 cursor-pointer"
+                >
+                  {savingMemberEdit ? 'Saving...' : 'Save Member Details'}
+                </button>
+              </div>
             </div>
           </form>
         </div>
